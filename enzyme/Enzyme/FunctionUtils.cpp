@@ -1797,6 +1797,27 @@ void SelectOptimization(Function *F) {
     }
   }
 }
+
+void RemoveTrivialAtomicIncrements(Function &F) {
+  SmallVector<AtomicRMWInst* , 4> Atoms;
+  for (BasicBlock &B: F) {
+    for (Instruction &I : B) {
+      if (auto AI = dyn_cast<AtomicRMWInst>(&I)) {
+        if (AI->getOperation() == AtomicRMWInst::FAdd &&
+            AI->getOrdering() == AtomicOrdering::Monotonic &&
+            AI->use_empty())
+            if (auto CI = dyn_cast<ConstantFP>(AI->getValOperand())) {
+              if (CI->isZeroValue())
+                Atoms.push_back(AI);
+            } 
+      }
+    }
+  }
+  for (auto AI : Atoms) {
+    AI->eraseFromParent();
+  }
+}
+
 void PreProcessCache::optimizeIntermediate(Function *F) {
   PromotePass().run(*F, FAM);
   GVN().run(*F, FAM);
@@ -1852,6 +1873,8 @@ void PreProcessCache::optimizeIntermediate(Function *F) {
       }
     }
   }
+
+  RemoveTrivialAtomicIncrements(*F);
 
   PassManagerBuilder Builder;
   Builder.OptLevel = 2;
