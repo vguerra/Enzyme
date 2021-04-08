@@ -135,7 +135,7 @@ cl::opt<bool> EnzymeCoalese("enzyme-coalese", cl::init(false), cl::Hidden,
                             cl::desc("Whether to coalese memory allocations"));
 
 #if LLVM_VERSION_MAJOR >= 8
-static cl::opt<bool> EnzymePHIRestructure(
+cl::opt<bool> EnzymePHIRestructure(
     "enzyme-phi-restructure", cl::init(false), cl::Hidden,
     cl::desc("Whether to restructure phi's to have better unwrap behavior"));
 #endif
@@ -1324,7 +1324,7 @@ Function *PreProcessCache::preprocessForClone(Function *F,
     SimplifyCFGOptions scfgo(
         /*unsigned BonusThreshold=*/1, /*bool ForwardSwitchCond=*/false,
         /*bool SwitchToLookup=*/false, /*bool CanonicalLoops=*/true,
-        /*bool SinkCommon=*/true, /*AssumptionCache *AssumpCache=*/nullptr);
+        /*bool SinkCommon=*/false, /*AssumptionCache *AssumpCache=*/nullptr);
 #endif
     {
       auto PA = SimplifyCFGPass(scfgo).run(*NewF, FAM);
