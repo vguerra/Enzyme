@@ -1062,36 +1062,45 @@ public:
     }
 
     ptr = invertPointerM(ptr, BuilderM);
-    if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
-      ptr = lookupM(ptr, BuilderM);
 
-    if (!mask) {
-      auto ts = BuilderM.CreateStore(newval, ptr);
-      if (align)
-#if LLVM_VERSION_MAJOR >= 10
-        ts->setAlignment(*align);
-#else
-        ts->setAlignment(align);
-#endif
-      ts->setVolatile(isVolatile);
-      ts->setOrdering(ordering);
-      ts->setSyncScopeID(syncScope);
-    } else {
+    auto rule = [&](Value *ptr, Value *newval) {
       if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
-        mask = lookupM(mask, BuilderM);
-      Type *tys[] = {newval->getType(), ptr->getType()};
-      auto F = Intrinsic::getDeclaration(oldFunc->getParent(),
-                                         Intrinsic::masked_store, tys);
-      assert(align);
+        ptr = lookupM(ptr, BuilderM);
+
+      if (!mask) {
+        auto ts = BuilderM.CreateStore(newval, ptr);
+        if (align)
 #if LLVM_VERSION_MAJOR >= 10
-      Value *alignv =
-          ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align->value());
+          ts->setAlignment(*align);
 #else
-      Value *alignv =
-          ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align);
+          ts->setAlignment(align);
 #endif
-      Value *args[] = {newval, ptr, alignv, mask};
-      BuilderM.CreateCall(F, args)->setCallingConv(F->getCallingConv());
+        ts->setVolatile(isVolatile);
+        ts->setOrdering(ordering);
+        ts->setSyncScopeID(syncScope);
+      } else {
+        if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
+          mask = lookupM(mask, BuilderM);
+        Type *tys[] = {newval->getType(), ptr->getType()};
+        auto F = Intrinsic::getDeclaration(oldFunc->getParent(),
+                                           Intrinsic::masked_store, tys);
+        assert(align);
+#if LLVM_VERSION_MAJOR >= 10
+        Value *alignv = ConstantInt::get(Type::getInt32Ty(ptr->getContext()),
+                                         align->value());
+#else
+        Value *alignv =
+            ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align);
+#endif
+        Value *args[] = {newval, ptr, alignv, mask};
+        BuilderM.CreateCall(F, args)->setCallingConv(F->getCallingConv());
+      }
+    };
+
+    if (width > 1) {
+      applyChainRule(ptr, newval, BuilderM, rule);
+    } else {
+      rule(ptr, newval);
     }
   }
 
@@ -1256,9 +1265,10 @@ public:
         if (isa<LoadInst>(inst)) {
           IRBuilder<> BuilderZ(inst);
           getForwardBuilder(BuilderZ);
-
-          PHINode *anti = BuilderZ.CreatePHI(inst->getType(), 1,
-                                             inst->getName() + "'il_phi");
+          Type *antiTy = width > 1 ? ArrayType::get(inst->getType(), width)
+                                   : inst->getType();
+          PHINode *anti =
+              BuilderZ.CreatePHI(antiTy, 1, inst->getName() + "'il_phi");
           invertedPointers.insert(std::make_pair(
               (const Value *)inst, InvertedPointerVH(this, anti)));
           continue;
@@ -1285,9 +1295,11 @@ public:
 
         IRBuilder<> BuilderZ(inst);
         getForwardBuilder(BuilderZ);
-
+        Type *antiTy = getWidth() > 1
+                           ? ArrayType::get(inst->getType(), getWidth())
+                           : inst->getType();
         PHINode *anti =
-            BuilderZ.CreatePHI(op->getType(), 1, op->getName() + "'ip_phi");
+            BuilderZ.CreatePHI(antiTy, 1, op->getName() + "'ip_phi");
         invertedPointers.insert(
             std::make_pair((const Value *)inst, InvertedPointerVH(this, anti)));
 
@@ -1531,6 +1543,208 @@ public:
         getNewFromOriginal(Builder2.getCurrentDebugLocation()));
     Builder2.setFastMathFlags(getFast());
   }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, Value *diff2,
+                        Value *diff3, IRBuilder<> &Builder, Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff3->getType())->getNumElements() == width);
+
+      Type *wrappedType = ArrayType::get(diffType, width);
+      Value *res = UndefValue::get(wrappedType);
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+        auto extracted_diff3 = Builder.CreateExtractValue(diff3, {i});
+        auto diff = rule(extracted_diff1, extracted_diff2, extracted_diff3);
+        res = Builder.CreateInsertValue(res, diff, {i});
+      }
+      return res;
+    } else {
+      return rule(diff1, diff2, diff3);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, Value *diff2,
+                        IRBuilder<> &Builder, Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+
+      Type *wrappedType = ArrayType::get(diffType, width);
+      Value *res = UndefValue::get(wrappedType);
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+        auto diff = rule(extracted_diff1, extracted_diff2);
+        res = Builder.CreateInsertValue(res, diff, {i});
+      }
+      return res;
+    } else {
+      return rule(diff1, diff2);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, IRBuilder<> &Builder,
+                        Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+
+      Type *wrappedType = ArrayType::get(diffType, width);
+      Value *res = UndefValue::get(wrappedType);
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        auto diff = rule(extracted_diff1);
+        res = Builder.CreateInsertValue(res, diff, {i});
+      }
+      return res;
+    } else {
+      return rule(diff1);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, Value *diff2, Value *diff3,
+                      IRBuilder<> &Builder, Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff3->getType())->getNumElements() == width);
+
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+        auto extracted_diff3 = Builder.CreateExtractValue(diff3, {i});
+        rule(extracted_diff1, extracted_diff2, extracted_diff3);
+      }
+    } else {
+      rule(diff1, diff2, diff3);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, Value *diff2, IRBuilder<> &Builder,
+                      Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+      assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+        rule(extracted_diff1, extracted_diff2);
+      }
+    } else {
+      rule(diff1, diff2);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, IRBuilder<> &Builder, Func rule) {
+    if (width > 1) {
+      assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+
+      for (unsigned int i = 0; i < getWidth(); ++i) {
+        auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+        rule(extracted_diff1);
+      }
+    } else {
+      rule(diff1);
+    }
+  }
+
+  /// Unwraps an collection of constant vector derivatives from their internal
+  /// representations and applies a function f to each element.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, ArrayRef<Constant *> diffs,
+                        IRBuilder<> &Builder, Func rule) {
+    for (auto diff : diffs) {
+      assert(cast<ArrayType>(diff->getType())->getNumElements() == width);
+    }
+    assert(width > 1);
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      SmallVector<Constant *, 3> extracted_diffs;
+      for (auto diff : diffs) {
+        extracted_diffs.push_back(
+            cast<Constant>(Builder.CreateExtractValue(diff, {i})));
+      }
+      auto diff = rule(extracted_diffs);
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+
+  /// Applies a function f `vectorWidth` times.
+  /// Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyAndWrap(Type *diffType, IRBuilder<> &Builder, Func f) {
+    assert(width > 1);
+
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto diff = f();
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+  /// Unwraps a vector in our internal representation into a llvm vector
+  Value *wrapVector(Value *diffe, IRBuilder<> &Builder) {
+    VectorType *diffeTy = cast<VectorType>(diffe->getType());
+#if LLVM_VERSION_MAJOR >= 12
+    assert(diffeTy->getElementCount().getKnownMinValue() % width == 0);
+    unsigned n = diffeTy->getElementCount().getKnownMinValue() / width;
+#else
+    assert(diffeTy->getNumElements() % width == 0);
+    unsigned n = diffeTy->getNumElements() / width;
+#endif
+    assert(width > 1);
+
+    if (n == 1) {
+      Type *vecTy = ArrayType::get(diffeTy->getElementType(), width);
+      Value *vec = UndefValue::get(vecTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *elem = Builder.CreateExtractElement(diffe, i);
+        vec = Builder.CreateInsertValue(vec, elem, {i});
+      }
+      return vec;
+    } else {
+#if LLVM_VERSION_MAJOR >= 11
+      Type *vecTy = FixedVectorType::get(diffeTy->getElementType(), n);
+#else
+      Type *vecTy = VectorType::get(diffeTy->getElementType(), n);
+#endif
+      Type *aggTy = ArrayType::get(vecTy, width);
+      Value *agg = UndefValue::get(aggTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *vecelem = UndefValue::get(vecTy);
+        for (unsigned j = 0; j < n; ++j) {
+          Value *elem = Builder.CreateExtractElement(diffe, i * j);
+          vecelem = Builder.CreateInsertElement(vecelem, elem, j);
+        }
+        agg = Builder.CreateInsertValue(agg, vecelem, {i});
+      }
+      return agg;
+    }
+  }
 };
 
 class DiffeGradientUtils : public GradientUtils {
@@ -1579,24 +1793,26 @@ private:
     if (auto inst = dyn_cast<Instruction>(val))
       assert(inst->getParent()->getParent() == oldFunc);
     assert(inversionAllocs);
+
+    Type *type = getWidth() > 1 ? ArrayType::get(val->getType(), getWidth())
+                                : val->getType();
     if (differentials.find(val) == differentials.end()) {
       IRBuilder<> entryBuilder(inversionAllocs);
       entryBuilder.setFastMathFlags(getFast());
-      differentials[val] = entryBuilder.CreateAlloca(val->getType(), nullptr,
-                                                     val->getName() + "'de");
+      differentials[val] =
+          entryBuilder.CreateAlloca(type, nullptr, val->getName() + "'de");
       auto Alignment =
-          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(
-              val->getType());
+          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(type);
 #if LLVM_VERSION_MAJOR >= 10
       differentials[val]->setAlignment(Align(Alignment));
 #else
       differentials[val]->setAlignment(Alignment);
 #endif
-      entryBuilder.CreateStore(Constant::getNullValue(val->getType()),
+      entryBuilder.CreateStore(Constant::getNullValue(type),
                                differentials[val]);
     }
     assert(cast<PointerType>(differentials[val]->getType())->getElementType() ==
-           val->getType());
+           type);
     return differentials[val];
   }
 
