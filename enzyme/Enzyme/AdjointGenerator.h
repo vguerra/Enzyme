@@ -980,19 +980,26 @@ public:
       break;
     }
     case DerivativeMode::ForwardMode: {
-      Value *orig_op0 = I.getOperand(0);
-
       IRBuilder<> Builder2(&I);
       getForwardBuilder(Builder2);
 
-      if (!gutils->isConstantValue(orig_op0)) {
-        Value *dif = diffe(orig_op0, Builder2);
-        setDiffe(&I, Builder2.CreateCast(I.getOpcode(), dif, I.getType()),
-                 Builder2);
-      } else {
-        setDiffe(&I, Constant::getNullValue(I.getType()), Builder2);
-      }
+      Value *orig_op0 = I.getOperand(0);
+      Type *diffTy = gutils->getWidth() > 1
+                         ? ArrayType::get(I.getType(), gutils->getWidth())
+                         : I.getType();
 
+      auto rule = [&](Value *dif) {
+        return Builder2.CreateCast(I.getOpcode(), dif, I.getType());
+      };
+
+      if (!gutils->isConstantValue(orig_op0)) {
+        Value *dop0 = diffe(orig_op0, Builder2);
+        Value *diff = applyChainRule(I.getType(), dop0, Builder2, rule);
+
+        setDiffe(&I, diff, Builder2);
+      } else {
+        setDiffe(&I, Constant::getNullValue(diffTy), Builder2);
+      }
       break;
     }
     }
@@ -1587,6 +1594,77 @@ public:
   void setDiffe(Value *val, Value *dif, IRBuilder<> &Builder) {
     assert(Mode != DerivativeMode::ReverseModePrimal);
     ((DiffeGradientUtils *)gutils)->setDiffe(val, dif, Builder);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, Value *diff2,
+                        Value *diff3, IRBuilder<> &Builder, Func rule) {
+    return ((DiffeGradientUtils *)gutils)
+        ->applyChainRule(diffType, diff1, diff2, diff3, Builder, rule);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, Value *diff2,
+                        IRBuilder<> &Builder, Func rule) {
+    return ((DiffeGradientUtils *)gutils)
+        ->applyChainRule(diffType, diff1, diff2, Builder, rule);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, Value *diff1, IRBuilder<> &Builder,
+                        Func rule) {
+    return ((DiffeGradientUtils *)gutils)
+        ->applyChainRule(diffType, diff1, Builder, rule);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, Value *diff2, Value *diff3,
+                      IRBuilder<> &Builder, Func rule) {
+    ((DiffeGradientUtils *)gutils)
+        ->applyChainRule(diff1, diff2, diff3, Builder, rule);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, Value *diff2, IRBuilder<> &Builder,
+                      Func rule) {
+    ((DiffeGradientUtils *)gutils)->applyChainRule(diff1, diff2, Builder, rule);
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void applyChainRule(Value *diff1, IRBuilder<> &Builder, Func rule) {
+    ((DiffeGradientUtils *)gutils)->applyChainRule(diff1, Builder, rule);
+  }
+
+  /// Unwraps an collection of constant vector derivatives from their internal
+  /// representations and applies a function f to each element.
+  template <typename Func>
+  Value *applyChainRule(Type *diffType, ArrayRef<Constant *> diffs,
+                        IRBuilder<> &Builder, Func rule) {
+    return ((DiffeGradientUtils *)gutils)->applyChainRule(diffs, Builder, rule);
+  }
+
+  /// Applies a function f to each element.
+  /// Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyAndWrap(Type *diffType, IRBuilder<> &Builder, Func f) {
+    return ((DiffeGradientUtils *)gutils)->applyAndWrap(diffType, Builder, f);
+  }
+
+  /// Wraps a llvm into our internal representation.
+  Value *wrapVector(Value *diffe, IRBuilder<> &Builder) {
+    return ((DiffeGradientUtils *)gutils)->wrapVector(diffe, Builder);
   }
 
   bool shouldFree() {

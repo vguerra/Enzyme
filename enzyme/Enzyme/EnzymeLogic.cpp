@@ -2421,7 +2421,10 @@ void createTerminator(TypeResults &TR, DiffeGradientUtils *gutils,
       } else if (!gutils->isConstantValue(ret)) {
         toret = gutils->diffe(ret, nBuilder);
       } else {
-        toret = Constant::getNullValue(ret->getType());
+        Type *retTy = gutils->getWidth() > 1
+                          ? ArrayType::get(ret->getType(), gutils->getWidth())
+                          : ret->getType();
+        toret = Constant::getNullValue(retTy);
       }
 
       break;
