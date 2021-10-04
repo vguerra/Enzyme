@@ -901,7 +901,8 @@ void calculateUnusedValuesInFunction(
         }
         if ((mode == DerivativeMode::ReverseModePrimal ||
              mode == DerivativeMode::ReverseModeCombined ||
-             mode == DerivativeMode::ForwardMode) &&
+             mode == DerivativeMode::ForwardMode ||
+             mode == DerivativeMode::ForwardModeVector) &&
             inst->mayWriteToMemory() && !isLibMFn) {
           return UseReq::Need;
         }
@@ -2396,8 +2397,9 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
   return AugmentedCachedFunctions.find(tup)->second;
 }
 
-void createTerminator(TypeResults &TR, DiffeGradientUtils *gutils,
-                      BasicBlock *oBB, DIFFE_TYPE retType, ReturnType retVal) {
+void createTerminator(DerivativeMode mode, TypeResults &TR,
+                      DiffeGradientUtils *gutils, BasicBlock *oBB,
+                      DIFFE_TYPE retType, ReturnType retVal) {
 
   BasicBlock *nBB = cast<BasicBlock>(gutils->getNewFromOriginal(oBB));
   assert(nBB);
@@ -2421,7 +2423,10 @@ void createTerminator(TypeResults &TR, DiffeGradientUtils *gutils,
       } else if (!gutils->isConstantValue(ret)) {
         toret = gutils->diffe(ret, nBuilder);
       } else {
-        toret = Constant::getNullValue(ret->getType());
+        Type *retTy = mode == DerivativeMode::ForwardModeVector
+                          ? ArrayType::get(ret->getType(), gutils->getWidth())
+                          : ret->getType();
+        toret = Constant::getNullValue(retTy);
       }
 
       break;
@@ -3182,8 +3187,8 @@ Function *EnzymeLogic::CreatePrimalAndGradient(
   bool diffeReturnArg = key.retType == DIFFE_TYPE::OUT_DIFF;
 
   DiffeGradientUtils *gutils = DiffeGradientUtils::CreateFromClone(
-      *this, key.mode, key.todiff, TLI, TA, key.retType, diffeReturnArg,
-      key.constant_args, retVal, key.additionalType, omp);
+      *this, key.mode, /* width */ 1, key.todiff, TLI, TA, key.retType,
+      diffeReturnArg, key.constant_args, retVal, key.additionalType, omp);
 
   gutils->AtomicAdd = key.AtomicAdd;
   gutils->FreeMemory = key.freeMemory;
@@ -3725,7 +3730,7 @@ Function *EnzymeLogic::CreateForwardDiff(
     Function *todiff, DIFFE_TYPE retType,
     const std::vector<DIFFE_TYPE> &constant_args, TargetLibraryInfo &TLI,
     TypeAnalysis &TA, bool returnUsed, bool dretPtr, DerivativeMode mode,
-    llvm::Type *additionalArg, const FnTypeInfo &oldTypeInfo_,
+    size_t width, llvm::Type *additionalArg, const FnTypeInfo &oldTypeInfo_,
     const std::map<Argument *, bool> _uncacheable_args, bool PostOpt,
     bool omp) {
 
@@ -3784,8 +3789,8 @@ Function *EnzymeLogic::CreateForwardDiff(
   bool diffeReturnArg = false;
 
   DiffeGradientUtils *gutils = DiffeGradientUtils::CreateFromClone(
-      *this, mode, todiff, TLI, TA, retType, diffeReturnArg, constant_args,
-      retVal, additionalArg, omp);
+      *this, mode, width, todiff, TLI, TA, retType, diffeReturnArg,
+      constant_args, retVal, additionalArg, omp);
 
   insert_or_assign2<ForwardCacheKey, Function *>(ForwardCachedFunctions, tup,
                                                  gutils->newFunc);
@@ -3967,7 +3972,7 @@ Function *EnzymeLogic::CreateForwardDiff(
       maker->visit(&*it);
     }
 
-    createTerminator(TR, gutils, &oBB, retType, retVal);
+    createTerminator(mode, TR, gutils, &oBB, retType, retVal);
   }
 
   gutils->eraseFictiousPHIs();

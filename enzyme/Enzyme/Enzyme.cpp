@@ -299,6 +299,154 @@ static void handleAnnotations(llvm::Function &F) {
   }
 }
 
+static Value *convertToInternalVectorRepresentation(
+    IRBuilder<> &Builder, llvm::CallInst *CI, llvm::Type *PTy, unsigned int &i,
+    llvm::Value *res, std::optional<unsigned int> &width) {
+  if (res->getType()->isAggregateType()) {
+    unsigned newWidth;
+    if (StructType *sty = dyn_cast<StructType>(res->getType())) {
+#if LLVM_VERSION_MAJOR >= 11
+      if (auto vty = dyn_cast<FixedVectorType>(PTy)) {
+#else
+      if (auto vty = dyn_cast<VectorType>(PTy)) {
+#endif
+        newWidth = sty->getNumElements() / vty->getNumElements();
+      } else {
+        newWidth = sty->getNumElements();
+      }
+    } else if (ArrayType *aty = dyn_cast<ArrayType>(res->getType())) {
+#if LLVM_VERSION_MAJOR >= 11
+      if (auto vty = dyn_cast<FixedVectorType>(PTy)) {
+#else
+      if (auto vty = dyn_cast<VectorType>(PTy)) {
+#endif
+        newWidth = aty->getNumElements() / vty->getNumElements();
+      } else {
+        newWidth = aty->getNumElements();
+      }
+    }
+    assert(!width || *width == newWidth);
+    width = newWidth;
+
+    Type *ty = ArrayType::get(PTy, *width);
+    Value *vec = UndefValue::get(ty);
+    for (unsigned int i = 0; i < *width; i++) {
+#if LLVM_VERSION_MAJOR >= 11
+      if (auto VPTy = dyn_cast<FixedVectorType>(PTy)) {
+#else
+      if (auto VPTy = dyn_cast<VectorType>(PTy)) {
+#endif
+        Value *vecelem = UndefValue::get(PTy);
+        for (unsigned int j = 0; j < VPTy->getNumElements(); ++j) {
+          Value *elem = Builder.CreateExtractValue(res, i * j);
+          vecelem = Builder.CreateInsertElement(vecelem, elem, i);
+        }
+        vec = Builder.CreateInsertValue(vec, vecelem, {i});
+      } else {
+        Value *elem = Builder.CreateExtractValue(res, i);
+        vec = Builder.CreateInsertValue(vec, elem, {i});
+      }
+    }
+    return vec;
+#if LLVM_VERSION_MAJOR >= 11
+  } else if (FixedVectorType *vty = dyn_cast<FixedVectorType>(res->getType())) {
+#else
+  } else if (VectorType *vty = dyn_cast<VectorType>(res->getType())) {
+#endif
+    unsigned newWidth;
+#if LLVM_VERSION_MAJOR >= 11
+    if (auto orig_arg = dyn_cast<FixedVectorType>(PTy)) {
+#else
+    if (auto orig_arg = dyn_cast<VectorType>(PTy)) {
+#endif
+      newWidth = vty->getNumElements() / orig_arg->getNumElements();
+    } else {
+      newWidth = vty->getNumElements();
+    }
+    assert(!width || *width == vty->getNumElements());
+    width = newWidth;
+    return res;
+  } else if (PointerType *pty = dyn_cast<PointerType>(res->getType())) {
+    if (StructType *sty = dyn_cast<StructType>(pty->getPointerElementType())) {
+      assert(!width || *width == sty->getStructNumElements());
+      width = sty->getStructNumElements();
+      if (CI->paramHasAttr(i, Attribute::StructRet)) {
+        Type *ty = ArrayType::get(PTy, *width);
+        Value *vec = UndefValue::get(ty);
+        for (unsigned int i = 0; i < *width; i++) {
+          // TODO: this does not always work
+          Value *elem = Builder.CreateStructGEP(res, i);
+          vec = Builder.CreateInsertValue(vec, elem, {i});
+        }
+        return vec;
+      } else {
+        report_fatal_error(
+            "Invalid pointer type in __enzyme_fwdvectordiff call.");
+      }
+    } else {
+      report_fatal_error(
+          "Invalid pointer type in __enzyme_fwdvectordiff call.");
+    }
+  } else {
+    llvm::errs()
+        << "Cannot determine vector width. This is most likely due to "
+           "clang passing the struct representing our vector as single "
+           "arguments. Trying to guess vector width based on return "
+           "type...\n";
+    assert(!width || *width == CI->getType()->getStructNumElements());
+    width = CI->getType()->getStructNumElements();
+    Value *vec = UndefValue::get(ArrayType::get(PTy, *width));
+    for (unsigned int j = 0; j < *width; j++) {
+      Value *elem = CI->getArgOperand(i + j);
+      vec = Builder.CreateInsertValue(vec, elem, {j});
+    }
+    i += *width;
+    return vec;
+  }
+}
+
+static Value *
+castToDiffeFunctionArgType(IRBuilder<> &Builder, llvm::CallInst *CI,
+                           llvm::FunctionType *FT, llvm::Type *destType,
+                           unsigned int i, DerivativeMode mode,
+                           llvm::Value *value, unsigned int truei) {
+  auto res = value;
+  if (auto ptr = dyn_cast<PointerType>(res->getType())) {
+    if (auto PT = dyn_cast<PointerType>(destType)) {
+      if (ptr->getAddressSpace() != PT->getAddressSpace()) {
+        res = Builder.CreateAddrSpaceCast(
+            res,
+            PointerType::get(ptr->getElementType(), PT->getAddressSpace()));
+        assert(value);
+        assert(destType);
+        assert(FT);
+        llvm::errs() << "Warning cast(2) __enzyme_autodiff argument " << i
+                     << " " << *res << "|" << *res->getType() << " to argument "
+                     << truei << " " << *destType << "\n"
+                     << "orig: " << *FT << "\n";
+        return res;
+      }
+    }
+  }
+
+  if (!res->getType()->canLosslesslyBitCastTo(destType)) {
+    assert(value);
+    assert(value->getType());
+    assert(destType);
+    assert(FT);
+    auto loc = CI->getDebugLoc();
+    if (auto arg = dyn_cast<Instruction>(res)) {
+      loc = arg->getDebugLoc();
+    }
+    EmitFailure("IllegalArgCast", loc, CI,
+                "Cannot cast __enzyme_autodiff shadow argument ", i, ", found ",
+                *res, ", type ", *res->getType(), " - to arg ", truei, " ",
+                *destType);
+    return nullptr;
+  }
+  return Builder.CreateBitCast(value, destType);
+}
+
 class Enzyme : public ModulePass {
 public:
   EnzymeLogic Logic;
@@ -329,7 +477,7 @@ public:
     std::vector<DIFFE_TYPE> constants;
     SmallVector<Value *, 2> args;
 
-    if (CI->paramHasAttr(0, Attribute::StructRet)) {
+    if (CI->hasStructRetAttr()) {
       fn = CI->getArgOperand(1);
     }
 
@@ -357,11 +505,12 @@ public:
     auto FT = cast<Function>(fn)->getFunctionType();
     assert(fn);
 
-    bool sret = CI->paramHasAttr(0, Attribute::StructRet) ||
+    bool sret = CI->hasStructRetAttr() ||
                 cast<Function>(fn)->hasParamAttribute(0, Attribute::StructRet);
 
     IRBuilder<> Builder(CI);
 
+    std::optional<unsigned int> width;
     unsigned truei = 0;
     if (cast<Function>(fn)->hasParamAttribute(0, Attribute::StructRet)) {
       Type *fnsrety = cast<PointerType>(FT->getParamType(0));
@@ -380,11 +529,24 @@ public:
       primal->insertBefore(CI);
 
       Value *shadow;
-      if (mode == DerivativeMode::ForwardMode) {
+      switch (mode) {
+      case DerivativeMode::ForwardMode: {
         shadow = CI->getArgOperand(0);
-      } else {
+        break;
+      }
+      case DerivativeMode::ForwardModeVector: {
+        unsigned ix = 0;
+        shadow = convertToInternalVectorRepresentation(
+            Builder, CI, primal->getType(), ix, CI->getArgOperand(0), width);
+        break;
+      }
+      case DerivativeMode::ReverseModePrimal:
+      case DerivativeMode::ReverseModeCombined:
+      case DerivativeMode::ReverseModeGradient: {
         shadow = CI->getArgOperand(1);
         sret = true;
+        break;
+      }
       }
 
       args.push_back(primal);
@@ -408,6 +570,7 @@ public:
     DIFFE_TYPE retType = whatType(cast<Function>(fn)->getReturnType(), mode);
 
     bool differentialReturn = mode != DerivativeMode::ForwardMode &&
+                              mode != DerivativeMode::ForwardModeVector &&
                               mode != DerivativeMode::ReverseModePrimal &&
                               (retType == DIFFE_TYPE::OUT_DIFF);
 
@@ -613,41 +776,63 @@ public:
           return false;
         }
         Value *res = CI->getArgOperand(i);
+
+        if (mode == DerivativeMode::ForwardModeVector &&
+            (
+#if LLVM_VERSION_MAJOR >= 12
+                CI->paramHasAttr(i, Attribute::ByRef) ||
+#endif
+                CI->paramHasAttr(i, Attribute::ByVal))) {
+          res = Builder.CreateLoad(res);
+        }
+
         if (PTy != res->getType()) {
-          if (auto ptr = dyn_cast<PointerType>(res->getType())) {
-            if (auto PT = dyn_cast<PointerType>(PTy)) {
-              if (ptr->getAddressSpace() != PT->getAddressSpace()) {
-                res = Builder.CreateAddrSpaceCast(
-                    res, PointerType::get(ptr->getElementType(),
-                                          PT->getAddressSpace()));
-                assert(res);
-                assert(PTy);
-                assert(FT);
-                llvm::errs() << "Warning cast(2) __enzyme_autodiff argument "
-                             << i << " " << *res << "|" << *res->getType()
-                             << " to argument " << truei << " " << *PTy << "\n"
-                             << "orig: " << *FT << "\n";
+          if (mode == DerivativeMode::ForwardModeVector) {
+            if (auto sty = dyn_cast<StructType>(res->getType())) {
+              SmallVector<Value *, 3> acc;
+              SmallVector<Type *, 3> tys;
+              for (unsigned i = 0; i < sty->getNumElements(); ++i) {
+                auto elem = Builder.CreateExtractValue(res, i);
+                Value *collect = nullptr;
+                if (auto vty = dyn_cast<VectorType>(PTy)) {
+                  collect = castToDiffeFunctionArgType(Builder, CI, FT,
+                                                       vty->getElementType(), i,
+                                                       mode, elem, truei);
+                } else {
+                  collect = castToDiffeFunctionArgType(Builder, CI, FT, PTy, i,
+                                                       mode, elem, truei);
+                }
+
+                if (!collect) {
+                  return false;
+                }
+                acc.push_back(collect);
+                tys.push_back(collect->getType());
+              }
+              Type *resultType = StructType::get(PTy->getContext(), tys);
+              res = UndefValue::get(resultType);
+              for (unsigned i = 0; i < sty->getNumElements(); ++i) {
+                res = Builder.CreateInsertValue(res, acc[i], {i});
               }
             }
-          }
-          if (!res->getType()->canLosslesslyBitCastTo(PTy)) {
-            assert(res);
-            assert(res->getType());
-            assert(PTy);
-            assert(FT);
-            auto loc = CI->getDebugLoc();
-            if (auto arg = dyn_cast<Instruction>(res)) {
-              loc = arg->getDebugLoc();
+          } else {
+            res = castToDiffeFunctionArgType(Builder, CI, FT, PTy, i, mode, res,
+                                             truei);
+            if (!res) {
+              return false;
             }
-            EmitFailure("IllegalArgCast", loc, CI,
-                        "Cannot cast __enzyme_autodiff shadow argument", i,
-                        ", found ", *res, ", type ", *res->getType(),
-                        " - to arg ", truei, " ", *PTy);
-            return false;
           }
-          res = Builder.CreateBitCast(res, PTy);
         }
-        args.push_back(res);
+
+        // Convert struct used in C calling convention to vector type for
+        // internal use.
+        if (mode == DerivativeMode::ForwardModeVector) {
+          auto arg = convertToInternalVectorRepresentation(Builder, CI, PTy, i,
+                                                           res, width);
+          args.push_back(arg);
+        } else {
+          args.push_back(res);
+        }
       }
 
       ++truei;
@@ -686,11 +871,21 @@ public:
     const AugmentedReturn *aug;
     switch (mode) {
     case DerivativeMode::ForwardModeVector:
+      if (width) {
+        newFunc = Logic.CreateForwardDiff(
+            cast<Function>(fn), retType, constants, TLI, TA,
+            /*should return*/ false, /*dretPtr*/ false, mode,
+            /* width */ *width,
+            /*addedType*/ nullptr, type_args, volatile_args, PostOpt);
+      } else {
+        report_fatal_error("Misssing vector width for vector mode");
+      }
+      break;
     case DerivativeMode::ForwardModeSplit:
     case DerivativeMode::ForwardMode:
       newFunc = Logic.CreateForwardDiff(
           cast<Function>(fn), retType, constants, TLI, TA,
-          /*should return*/ false, /*dretPtr*/ false, mode,
+          /*should return*/ false, /*dretPtr*/ false, mode, /* width */ 1,
           /*addedType*/ nullptr, type_args, volatile_args, PostOpt);
       break;
     case DerivativeMode::ReverseModeCombined:
@@ -878,10 +1073,43 @@ public:
     StructType *CIsty = dyn_cast<StructType>(CI->getType());
     StructType *diffretsty = dyn_cast<StructType>(diffret->getType());
 
+    // Adapt the returned vector type to the struct type expected by our calling
+    // convention.
+    if (mode == DerivativeMode::ForwardModeVector &&
+        !diffret->getType()->isEmptyTy() && !diffret->getType()->isVoidTy()) {
+
+      /// Actual return type (including struct return)
+      Type *returnType =
+          CI->hasStructRetAttr()
+              ? dyn_cast<PointerType>(CI->getArgOperand(0)->getType())
+                    ->getPointerElementType()
+              : CI->getType();
+
+      if (StructType *sty = dyn_cast<StructType>(returnType)) {
+        Value *agg = ConstantAggregateZero::get(sty);
+
+        for (unsigned int i = 0; i < *width; i++) {
+          Value *elem = Builder.CreateExtractValue(diffret, {i});
+#if LLVM_VERSION_MAJOR >= 11
+          if (auto vty = dyn_cast<FixedVectorType>(elem->getType())) {
+#else
+          if (auto vty = dyn_cast<VectorType>(elem->getType())) {
+#endif
+            for (unsigned j = 0; j < vty->getNumElements(); ++j) {
+              Value *vecelem = Builder.CreateExtractElement(elem, j);
+              agg = Builder.CreateInsertValue(agg, vecelem, {i * j});
+            }
+          } else {
+            agg = Builder.CreateInsertValue(agg, elem, {i});
+          }
+        }
+        diffret = agg;
+      }
+    }
+
     if (!diffret->getType()->isEmptyTy() && !diffret->getType()->isVoidTy() &&
         !CI->getType()->isEmptyTy() &&
-        (!CI->getType()->isVoidTy() ||
-         CI->paramHasAttr(0, Attribute::StructRet))) {
+        (!CI->getType()->isVoidTy() || CI->hasStructRetAttr())) {
       if (diffret->getType() == CI->getType()) {
         CI->replaceAllUsesWith(diffret);
       } else if (CIsty && diffretsty && CIsty->isLayoutIdentical(diffretsty)) {
@@ -907,9 +1135,10 @@ public:
           llvm::errs() << *CI << " - " << *diffret << "\n";
           assert(0 && " what");
         }
-      } else if (CI->paramHasAttr(0, Attribute::StructRet)) {
+      } else if (CI->hasStructRetAttr()) {
         Value *sret = CI->getArgOperand(0);
 
+        // Assign results to struct allocated at the call site.
         if (StructType *st = cast<StructType>(diffret->getType())) {
           for (unsigned int i = 0; i < st->getNumElements(); i++) {
             Builder.CreateStore(Builder.CreateExtractValue(diffret, {i}),
@@ -1041,6 +1270,7 @@ public:
               Fn->getName().contains("__enzyme_call_inactive") ||
               Fn->getName().contains("__enzyme_autodiff") ||
               Fn->getName().contains("__enzyme_fwddiff") ||
+              Fn->getName().contains("__enzyme_vecdiff") ||
               Fn->getName().contains("__enzyme_augmentfwd") ||
               Fn->getName().contains("__enzyme_augmentsize") ||
               Fn->getName().contains("__enzyme_reverse")))
@@ -1296,6 +1526,12 @@ public:
         } else if (Fn->getName().contains("__enzyme_fwddiff")) {
           enableEnzyme = true;
           mode = DerivativeMode::ForwardMode;
+        } else if (Fn->getName().contains("__enzyme_vecdiff")) {
+          enableEnzyme = true;
+          mode = DerivativeMode::ForwardModeVector;
+        } else if (Fn->getName().contains("__enzyme_fwdvectordiff")) {
+          enableEnzyme = true;
+          mode = DerivativeMode::ForwardModeVector;
         } else if (Fn->getName().contains("__enzyme_augmentfwd")) {
           enableEnzyme = true;
           mode = DerivativeMode::ReverseModePrimal;
@@ -1427,7 +1663,7 @@ public:
                        Arch == Triple::amdgcn;
 
       auto val = GradientUtils::GetOrCreateShadowConstant(
-          Logic, TLI, TA, fn, pair.second, AtomicAdd, PostOpt);
+          Logic, TLI, TA, fn, pair.second, 1, AtomicAdd, PostOpt);
       CI->replaceAllUsesWith(ConstantExpr::getPointerCast(val, CI->getType()));
       CI->eraseFromParent();
       Changed = true;

@@ -926,13 +926,21 @@ public:
   AAResults &OrigAA;
   TypeAnalysis &TA;
   bool omp;
+
+private:
+  size_t width;
+
+public:
+  size_t getWidth() { return width; }
+
+public:
   GradientUtils(EnzymeLogic &Logic, Function *newFunc_, Function *oldFunc_,
                 TargetLibraryInfo &TLI_, TypeAnalysis &TA_,
                 ValueToValueMapTy &invertedPointers_,
                 const SmallPtrSetImpl<Value *> &constantvalues_,
                 const SmallPtrSetImpl<Value *> &activevals_,
                 DIFFE_TYPE ReturnActivity, ValueToValueMapTy &originalToNewFn_,
-                DerivativeMode mode, bool omp)
+                DerivativeMode mode, size_t width, bool omp)
       : CacheUtility(TLI_, newFunc_), Logic(Logic), mode(mode),
         oldFunc(oldFunc_), invertedPointers(),
         OrigDT(Logic.PPC.FAM.getResult<llvm::DominatorTreeAnalysis>(*oldFunc_)),
@@ -947,8 +955,8 @@ public:
                                  notForAnalysis, TLI_, constantvalues_,
                                  activevals_, ReturnActivity)),
         tid(nullptr), numThreads(nullptr),
-        OrigAA(Logic.PPC.getAAResultsFromFunction(oldFunc_)), TA(TA_),
-        omp(omp) {
+        OrigAA(Logic.PPC.getAAResultsFromFunction(oldFunc_)), TA(TA_), omp(omp),
+        width(width) {
     if (oldFunc_->getSubprogram()) {
       assert(originalToNewFn_.hasMD());
     }
@@ -1018,36 +1026,45 @@ public:
     }
 
     ptr = invertPointerM(ptr, BuilderM);
-    if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
-      ptr = lookupM(ptr, BuilderM);
 
-    if (!mask) {
-      auto ts = BuilderM.CreateStore(newval, ptr);
-      if (align)
-#if LLVM_VERSION_MAJOR >= 10
-        ts->setAlignment(*align);
-#else
-        ts->setAlignment(align);
-#endif
-      ts->setVolatile(isVolatile);
-      ts->setOrdering(ordering);
-      ts->setSyncScopeID(syncScope);
-    } else {
+    auto rule = [&](Value *ptr, Value *newval) {
       if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
-        mask = lookupM(mask, BuilderM);
-      Type *tys[] = {newval->getType(), ptr->getType()};
-      auto F = Intrinsic::getDeclaration(oldFunc->getParent(),
-                                         Intrinsic::masked_store, tys);
-      assert(align);
+        ptr = lookupM(ptr, BuilderM);
+
+      if (!mask) {
+        auto ts = BuilderM.CreateStore(newval, ptr);
+        if (align)
 #if LLVM_VERSION_MAJOR >= 10
-      Value *alignv =
-          ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align->value());
+          ts->setAlignment(*align);
 #else
-      Value *alignv =
-          ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align);
+          ts->setAlignment(align);
 #endif
-      Value *args[] = {newval, ptr, alignv, mask};
-      BuilderM.CreateCall(F, args)->setCallingConv(F->getCallingConv());
+        ts->setVolatile(isVolatile);
+        ts->setOrdering(ordering);
+        ts->setSyncScopeID(syncScope);
+      } else {
+        if (!isOriginalBlock(*BuilderM.GetInsertBlock()))
+          mask = lookupM(mask, BuilderM);
+        Type *tys[] = {newval->getType(), ptr->getType()};
+        auto F = Intrinsic::getDeclaration(oldFunc->getParent(),
+                                           Intrinsic::masked_store, tys);
+        assert(align);
+#if LLVM_VERSION_MAJOR >= 10
+        Value *alignv = ConstantInt::get(Type::getInt32Ty(ptr->getContext()),
+                                         align->value());
+#else
+        Value *alignv =
+            ConstantInt::get(Type::getInt32Ty(ptr->getContext()), align);
+#endif
+        Value *args[] = {newval, ptr, alignv, mask};
+        BuilderM.CreateCall(F, args)->setCallingConv(F->getCallingConv());
+      }
+    };
+
+    if (mode == DerivativeMode::ForwardModeVector) {
+      unwrapAndApply(ptr, newval, BuilderM, rule);
+    } else {
+      rule(ptr, newval);
     }
   }
 
@@ -1212,9 +1229,11 @@ public:
         if (isa<LoadInst>(inst)) {
           IRBuilder<> BuilderZ(inst);
           getForwardBuilder(BuilderZ);
-
-          PHINode *anti = BuilderZ.CreatePHI(inst->getType(), 1,
-                                             inst->getName() + "'il_phi");
+          Type *antiTy = mode == DerivativeMode::ForwardModeVector
+                             ? ArrayType::get(inst->getType(), width)
+                             : inst->getType();
+          PHINode *anti =
+              BuilderZ.CreatePHI(antiTy, 1, inst->getName() + "'il_phi");
           invertedPointers.insert(std::make_pair(
               (const Value *)inst, InvertedPointerVH(this, anti)));
           continue;
@@ -1241,9 +1260,11 @@ public:
 
         IRBuilder<> BuilderZ(inst);
         getForwardBuilder(BuilderZ);
-
+        Type *antiTy = mode == DerivativeMode::ForwardModeVector
+                           ? ArrayType::get(inst->getType(), getWidth())
+                           : inst->getType();
         PHINode *anti =
-            BuilderZ.CreatePHI(op->getType(), 1, op->getName() + "'ip_phi");
+            BuilderZ.CreatePHI(antiTy, 1, op->getName() + "'ip_phi");
         invertedPointers.insert(
             std::make_pair((const Value *)inst, InvertedPointerVH(this, anti)));
 
@@ -1436,15 +1457,19 @@ public:
   Value *invertPointerM(Value *val, IRBuilder<> &BuilderM,
                         bool nullShadow = false);
 
-  static Constant *
-  GetOrCreateShadowConstant(EnzymeLogic &Logic, TargetLibraryInfo &TLI,
-                            TypeAnalysis &TA, Constant *F, DerivativeMode mode,
-                            bool AtomicAdd = true, bool PostOpt = false);
+  static Constant *GetOrCreateShadowConstant(EnzymeLogic &Logic,
+                                             TargetLibraryInfo &TLI,
+                                             TypeAnalysis &TA, Constant *F,
+                                             DerivativeMode mode, size_t width,
+                                             bool AtomicAdd = true,
+                                             bool PostOpt = false);
 
-  static Constant *
-  GetOrCreateShadowFunction(EnzymeLogic &Logic, TargetLibraryInfo &TLI,
-                            TypeAnalysis &TA, Function *F, DerivativeMode mode,
-                            bool AtomicAdd = true, bool PostOpt = false);
+  static Constant *GetOrCreateShadowFunction(EnzymeLogic &Logic,
+                                             TargetLibraryInfo &TLI,
+                                             TypeAnalysis &TA, Function *F,
+                                             DerivativeMode mode, size_t width,
+                                             bool AtomicAdd = true,
+                                             bool PostOpt = false);
 
   void branchToCorrespondingTarget(
       BasicBlock *ctx, IRBuilder<> &BuilderM,
@@ -1488,6 +1513,217 @@ public:
         getNewFromOriginal(Builder2.getCurrentDebugLocation()));
     Builder2.setFastMathFlags(getFast());
   }
+
+  /// Returns the type for the internal representation of a derivative vector.
+  Type *getTypeForVectorMode(Type *ty) {
+    return getTypeForVectorMode(ty, width);
+  }
+
+  /// Returns the type for the internal representation of a derivative vector of
+  /// size `width`
+  static Type *getTypeForVectorMode(Type *ty, unsigned int width) {
+    if (ty->isIntegerTy() || ty->isFloatingPointTy()) {
+#if LLVM_VERSION_MAJOR >= 11
+      return FixedVectorType::get(ty, width);
+#else
+      return VectorType::get(ty, width);
+#endif
+    } else if (VectorType *vty = dyn_cast<VectorType>(ty)) {
+#if LLVM_VERSION_MAJOR >= 11
+      ElementCount ec = vty->getElementCount() * width;
+#else
+      unsigned ec = vty->getNumElements() * width;
+#endif
+      return VectorType::get(vty->getElementType(), ec);
+    } else {
+      return ArrayType::get(ty, width);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *unwrapAndApply(Type *diffType, Value *diff1, Value *diff2,
+                        IRBuilder<> &Builder, Func f) {
+    assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+    assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+      auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+      auto diff = f(extracted_diff1, extracted_diff2);
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element. Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *unwrapAndApply(Type *diffType, Value *diff1, IRBuilder<> &Builder,
+                        Func f) {
+    assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+      auto diff = f(extracted_diff1);
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void unwrapAndApply(Value *diff1, Value *diff2, IRBuilder<> &Builder,
+                      Func f) {
+    assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+    assert(cast<ArrayType>(diff2->getType())->getNumElements() == width);
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+      auto extracted_diff2 = Builder.CreateExtractValue(diff2, {i});
+      f(extracted_diff1, extracted_diff2);
+    }
+  }
+
+  /// Unwraps a vector derivative from its internal representation and applies a
+  /// function f to each element.
+  template <typename Func>
+  void unwrapAndApply(Value *diff1, IRBuilder<> &Builder, Func f) {
+    assert(cast<ArrayType>(diff1->getType())->getNumElements() == width);
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto extracted_diff1 = Builder.CreateExtractValue(diff1, {i});
+      f(extracted_diff1);
+    }
+  }
+
+  /// Unwraps an collection of constant vector derivatives from their internal
+  /// representations and applies a function f to each element.
+  template <typename Func>
+  Value *unwrapAndApply(Type *diffType, ArrayRef<Constant *> diffs,
+                        IRBuilder<> &Builder, Func f) {
+    for (auto diff : diffs) {
+      assert(cast<ArrayType>(diff->getType())->getNumElements() == width);
+    }
+    assert(mode == DerivativeMode::ForwardModeVector);
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      SmallVector<Constant *, 3> extracted_diffs;
+      for (auto diff : diffs) {
+        extracted_diffs.push_back(
+            cast<Constant>(Builder.CreateExtractValue(diff, {i})));
+      }
+      auto diff = f(extracted_diffs);
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+
+  /// Applies a function f `vectorWidth` times.
+  /// Return values of f are collected and wrapped.
+  template <typename Func>
+  Value *applyAndWrap(Type *diffType, IRBuilder<> &Builder, Func f) {
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    Type *wrappedType = ArrayType::get(diffType, width);
+    Value *res = UndefValue::get(wrappedType);
+    for (unsigned int i = 0; i < getWidth(); ++i) {
+      auto diff = f();
+      res = Builder.CreateInsertValue(res, diff, {i});
+    }
+    return res;
+  }
+
+  /// Unwraps a vector in our internal representation into a llvm vector
+  Value *unwrapToVector(Value *diffe, IRBuilder<> &Builder) {
+    ArrayType *diffeTy = cast<ArrayType>(diffe->getType());
+    assert(diffeTy->getNumElements() == width);
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    if (auto diffeVecTy = dyn_cast<VectorType>(diffeTy->getElementType())) {
+#if LLVM_VERSION_MAJOR >= 12
+      unsigned numElems = diffeVecTy->getElementCount().getKnownMinValue();
+      ElementCount count = diffeVecTy->getElementCount();
+#else
+      unsigned numElems = diffeVecTy->getNumElements();
+      unsigned count = diffeVecTy->getNumElements();
+#endif
+      Type *vecTy =
+          VectorType::get(diffeVecTy->getElementType(), count * width);
+      Value *vec = UndefValue::get(vecTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *vecelem = Builder.CreateExtractValue(diffe, {i});
+        for (unsigned j = 0; j < numElems; ++j) {
+          Value *elem = Builder.CreateExtractElement(vecelem, j);
+          vec = Builder.CreateInsertElement(vec, elem, i * j);
+        }
+      }
+      return vec;
+    } else {
+#if LLVM_VERSION_MAJOR >= 11
+      Type *vecTy = FixedVectorType::get(diffeTy->getElementType(), width);
+#else
+      Type *vecTy = VectorType::get(diffeTy->getElementType(), width);
+#endif
+      Value *vec = UndefValue::get(vecTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *elem = Builder.CreateExtractValue(diffe, {i});
+        vec = Builder.CreateInsertElement(vec, elem, i);
+      }
+      return vec;
+    }
+  }
+
+  /// Unwraps a vector in our internal representation into a llvm vector
+  Value *wrapVector(Value *diffe, IRBuilder<> &Builder) {
+    VectorType *diffeTy = cast<VectorType>(diffe->getType());
+#if LLVM_VERSION_MAJOR >= 12
+    assert(diffeTy->getElementCount().getKnownMinValue() % width == 0);
+    unsigned n = diffeTy->getElementCount().getKnownMinValue() / width;
+#else
+    assert(diffeTy->getNumElements() % width == 0);
+    unsigned n = diffeTy->getNumElements() / width;
+#endif
+    assert(mode == DerivativeMode::ForwardModeVector);
+
+    if (n == 1) {
+      Type *vecTy = ArrayType::get(diffeTy->getElementType(), width);
+      Value *vec = UndefValue::get(vecTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *elem = Builder.CreateExtractElement(diffe, i);
+        vec = Builder.CreateInsertValue(vec, elem, {i});
+      }
+      return vec;
+    } else {
+#if LLVM_VERSION_MAJOR >= 11
+      Type *vecTy = FixedVectorType::get(diffeTy->getElementType(), n);
+#else
+      Type *vecTy = VectorType::get(diffeTy->getElementType(), n);
+#endif
+      Type *aggTy = ArrayType::get(vecTy, width);
+      Value *agg = UndefValue::get(aggTy);
+      for (unsigned i = 0; i < width; ++i) {
+        Value *vecelem = UndefValue::get(vecTy);
+        for (unsigned j = 0; j < n; ++j) {
+          Value *elem = Builder.CreateExtractElement(diffe, i * j);
+          vecelem = Builder.CreateInsertElement(vecelem, elem, j);
+        }
+        agg = Builder.CreateInsertValue(agg, vecelem, {i});
+      }
+      return agg;
+    }
+  }
 };
 
 class DiffeGradientUtils : public GradientUtils {
@@ -1497,10 +1733,10 @@ class DiffeGradientUtils : public GradientUtils {
                      const SmallPtrSetImpl<Value *> &constantvalues_,
                      const SmallPtrSetImpl<Value *> &returnvals_,
                      DIFFE_TYPE ActiveReturn, ValueToValueMapTy &origToNew_,
-                     DerivativeMode mode, bool omp)
+                     DerivativeMode mode, size_t width, bool omp)
       : GradientUtils(Logic, newFunc_, oldFunc_, TLI, TA, invertedPointers_,
                       constantvalues_, returnvals_, ActiveReturn, origToNew_,
-                      mode, omp) {
+                      mode, width, omp) {
     assert(reverseBlocks.size() == 0);
     if (mode == DerivativeMode::ForwardMode ||
         mode == DerivativeMode::ForwardModeSplit ||
@@ -1523,9 +1759,9 @@ public:
   bool FreeMemory;
   ValueMap<const Value *, TrackingVH<AllocaInst>> differentials;
   static DiffeGradientUtils *
-  CreateFromClone(EnzymeLogic &Logic, DerivativeMode mode, Function *todiff,
-                  TargetLibraryInfo &TLI, TypeAnalysis &TA, DIFFE_TYPE retType,
-                  bool diffeReturnArg,
+  CreateFromClone(EnzymeLogic &Logic, DerivativeMode mode, size_t width,
+                  Function *todiff, TargetLibraryInfo &TLI, TypeAnalysis &TA,
+                  DIFFE_TYPE retType, bool diffeReturnArg,
                   const std::vector<DIFFE_TYPE> &constant_args,
                   ReturnType returnValue, Type *additionalArg, bool omp);
 
@@ -1537,24 +1773,27 @@ private:
     if (auto inst = dyn_cast<Instruction>(val))
       assert(inst->getParent()->getParent() == oldFunc);
     assert(inversionAllocs);
+
+    Type *type = mode == DerivativeMode::ForwardModeVector
+                     ? ArrayType::get(val->getType(), getWidth())
+                     : val->getType();
     if (differentials.find(val) == differentials.end()) {
       IRBuilder<> entryBuilder(inversionAllocs);
       entryBuilder.setFastMathFlags(getFast());
-      differentials[val] = entryBuilder.CreateAlloca(val->getType(), nullptr,
-                                                     val->getName() + "'de");
+      differentials[val] =
+          entryBuilder.CreateAlloca(type, nullptr, val->getName() + "'de");
       auto Alignment =
-          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(
-              val->getType());
+          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(type);
 #if LLVM_VERSION_MAJOR >= 10
       differentials[val]->setAlignment(Align(Alignment));
 #else
       differentials[val]->setAlignment(Alignment);
 #endif
-      entryBuilder.CreateStore(Constant::getNullValue(val->getType()),
+      entryBuilder.CreateStore(Constant::getNullValue(type),
                                differentials[val]);
     }
     assert(cast<PointerType>(differentials[val]->getType())->getElementType() ==
-           val->getType());
+           type);
     return differentials[val];
   }
 

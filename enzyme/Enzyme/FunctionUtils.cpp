@@ -1555,19 +1555,30 @@ Function *PreProcessCache::preprocessForClone(Function *F,
   return NewF;
 }
 
-FunctionType *
-getFunctionTypeForClone(llvm::FunctionType *FTy, llvm::Type *additionalArg,
-                        const std::vector<DIFFE_TYPE> &constant_args,
-                        bool diffeReturnArg, ReturnType returnValue) {
+FunctionType *getFunctionTypeForClone(
+    llvm::FunctionType *FTy, DerivativeMode mode, size_t width,
+    llvm::Type *additionalArg, const std::vector<DIFFE_TYPE> &constant_args,
+    bool diffeReturnArg, ReturnType returnValue, DIFFE_TYPE returnType) {
   std::vector<Type *> RetTypes;
   if (returnValue == ReturnType::ArgsWithReturn ||
-      returnValue == ReturnType::ArgsWithTwoReturns ||
-      returnValue == ReturnType::Return ||
-      returnValue == ReturnType::TwoReturns)
-    RetTypes.push_back(FTy->getReturnType());
-  if (returnValue == ReturnType::ArgsWithTwoReturns ||
-      returnValue == ReturnType::TwoReturns)
-    RetTypes.push_back(FTy->getReturnType());
+      returnValue == ReturnType::Return) {
+    if (mode == DerivativeMode::ForwardModeVector &&
+        returnType != DIFFE_TYPE::CONSTANT) {
+      RetTypes.push_back(ArrayType::get(FTy->getReturnType(), width));
+    } else {
+      RetTypes.push_back(FTy->getReturnType());
+    }
+  } else if (returnValue == ReturnType::ArgsWithTwoReturns ||
+             returnValue == ReturnType::TwoReturns) {
+    if (mode == DerivativeMode::ForwardModeVector &&
+        returnType != DIFFE_TYPE::CONSTANT) {
+      RetTypes.push_back(FTy->getReturnType());
+      RetTypes.push_back(ArrayType::get(FTy->getReturnType(), width));
+    } else {
+      RetTypes.push_back(FTy->getReturnType());
+      RetTypes.push_back(FTy->getReturnType());
+    }
+  }
   std::vector<Type *> ArgTypes;
 
   // The user might be deleting arguments to the function by specifying them in
@@ -1578,7 +1589,11 @@ getFunctionTypeForClone(llvm::FunctionType *FTy, llvm::Type *additionalArg,
     ArgTypes.push_back(I);
     if (constant_args[argno] == DIFFE_TYPE::DUP_ARG ||
         constant_args[argno] == DIFFE_TYPE::DUP_NONEED) {
-      ArgTypes.push_back(I);
+      if (mode == DerivativeMode::ForwardModeVector) {
+        ArgTypes.push_back(ArrayType::get(I, width));
+      } else {
+        ArgTypes.push_back(I);
+      }
     } else if (constant_args[argno] == DIFFE_TYPE::OUT_DIFF) {
       RetTypes.push_back(I);
     }
@@ -1621,17 +1636,18 @@ getFunctionTypeForClone(llvm::FunctionType *FTy, llvm::Type *additionalArg,
 }
 
 Function *PreProcessCache::CloneFunctionWithReturns(
-    DerivativeMode mode, Function *&F, ValueToValueMapTy &ptrInputs,
-    const std::vector<DIFFE_TYPE> &constant_args,
+    DerivativeMode mode, size_t width, Function *&F,
+    ValueToValueMapTy &ptrInputs, const std::vector<DIFFE_TYPE> &constant_args,
     SmallPtrSetImpl<Value *> &constants, SmallPtrSetImpl<Value *> &nonconstant,
-    SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue, Twine name,
-    ValueToValueMapTy *VMapO, bool diffeReturnArg, llvm::Type *additionalArg) {
+    SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue,
+    DIFFE_TYPE returnType, Twine name, ValueToValueMapTy *VMapO,
+    bool diffeReturnArg, llvm::Type *additionalArg) {
   assert(!F->empty());
   F = preprocessForClone(F, mode);
   llvm::ValueToValueMapTy VMap;
-  llvm::FunctionType *FTy =
-      getFunctionTypeForClone(F->getFunctionType(), additionalArg,
-                              constant_args, diffeReturnArg, returnValue);
+  llvm::FunctionType *FTy = getFunctionTypeForClone(
+      F->getFunctionType(), mode, width, additionalArg, constant_args,
+      diffeReturnArg, returnValue, returnType);
 
   for (BasicBlock &BB : *F) {
     if (auto ri = dyn_cast<ReturnInst>(BB.getTerminator())) {
@@ -1712,7 +1728,8 @@ Function *PreProcessCache::CloneFunctionWithReturns(
         constant_args[ii] == DIFFE_TYPE::DUP_NONEED) {
       hasPtrInput = true;
       ptrInputs[i] = (j + 1);
-      if (F->hasParamAttribute(ii, Attribute::NoCapture)) {
+      if (F->hasParamAttribute(ii, Attribute::NoCapture) &&
+          mode != DerivativeMode::ForwardModeVector) {
         NewF->addParamAttr(jj + 1, Attribute::NoCapture);
       }
 
