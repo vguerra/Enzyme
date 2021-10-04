@@ -1551,8 +1551,8 @@ Function *PreProcessCache::preprocessForClone(Function *F,
 }
 
 Function *PreProcessCache::CloneFunctionWithReturns(
-    DerivativeMode mode, Function *&F, ValueToValueMapTy &ptrInputs,
-    const std::vector<DIFFE_TYPE> &constant_args,
+    DerivativeMode mode, size_t width, Function *&F,
+    ValueToValueMapTy &ptrInputs, const std::vector<DIFFE_TYPE> &constant_args,
     SmallPtrSetImpl<Value *> &constants, SmallPtrSetImpl<Value *> &nonconstant,
     SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue, Twine name,
     ValueToValueMapTy *VMapO, bool diffeReturnArg, llvm::Type *additionalArg) {
@@ -1560,13 +1560,22 @@ Function *PreProcessCache::CloneFunctionWithReturns(
   F = preprocessForClone(F, mode);
   std::vector<Type *> RetTypes;
   if (returnValue == ReturnType::ArgsWithReturn ||
-      returnValue == ReturnType::ArgsWithTwoReturns ||
-      returnValue == ReturnType::Return ||
-      returnValue == ReturnType::TwoReturns)
-    RetTypes.push_back(F->getReturnType());
-  if (returnValue == ReturnType::ArgsWithTwoReturns ||
-      returnValue == ReturnType::TwoReturns)
-    RetTypes.push_back(F->getReturnType());
+      returnValue == ReturnType::Return) {
+    if (mode == DerivativeMode::ForwardModeVector) {
+      RetTypes.push_back(FixedVectorType::get(F->getReturnType(), width));
+    } else {
+      RetTypes.push_back(F->getReturnType());
+    }
+  } else if (returnValue == ReturnType::ArgsWithTwoReturns ||
+             returnValue == ReturnType::TwoReturns) {
+    if (mode == DerivativeMode::ForwardModeVector) {
+      RetTypes.push_back(F->getReturnType());
+      RetTypes.push_back(FixedVectorType::get(F->getReturnType(), width));
+    } else {
+      RetTypes.push_back(F->getReturnType());
+      RetTypes.push_back(F->getReturnType());
+    }
+  }
   std::vector<Type *> ArgTypes;
 
   ValueToValueMapTy VMap;
@@ -1578,7 +1587,12 @@ Function *PreProcessCache::CloneFunctionWithReturns(
     ArgTypes.push_back(I.getType());
     if (constant_args[argno] == DIFFE_TYPE::DUP_ARG ||
         constant_args[argno] == DIFFE_TYPE::DUP_NONEED) {
-      ArgTypes.push_back(I.getType());
+      if (mode == DerivativeMode::ForwardModeVector) {
+        ArgTypes.push_back(
+            GradientUtils::getTypeForVectorMode(I.getType(), width));
+      } else {
+        ArgTypes.push_back(I.getType());
+      }
     } else if (constant_args[argno] == DIFFE_TYPE::OUT_DIFF) {
       RetTypes.push_back(I.getType());
     }

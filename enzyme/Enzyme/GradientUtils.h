@@ -901,13 +901,21 @@ public:
   AAResults &OrigAA;
   TypeAnalysis &TA;
   bool omp;
+
+private:
+  size_t width;
+
+public:
+  size_t getWidth() { return width; }
+
+public:
   GradientUtils(EnzymeLogic &Logic, Function *newFunc_, Function *oldFunc_,
                 TargetLibraryInfo &TLI_, TypeAnalysis &TA_,
                 ValueToValueMapTy &invertedPointers_,
                 const SmallPtrSetImpl<Value *> &constantvalues_,
                 const SmallPtrSetImpl<Value *> &activevals_,
                 DIFFE_TYPE ReturnActivity, ValueToValueMapTy &originalToNewFn_,
-                DerivativeMode mode, bool omp)
+                DerivativeMode mode, size_t width, bool omp)
       : CacheUtility(TLI_, newFunc_), Logic(Logic), mode(mode),
         oldFunc(oldFunc_), invertedPointers(),
         OrigDT(Logic.PPC.FAM.getResult<llvm::DominatorTreeAnalysis>(*oldFunc_)),
@@ -922,8 +930,8 @@ public:
                                  notForAnalysis, TLI_, constantvalues_,
                                  activevals_, ReturnActivity)),
         tid(nullptr), numThreads(nullptr),
-        OrigAA(Logic.PPC.getAAResultsFromFunction(oldFunc_)), TA(TA_),
-        omp(omp) {
+        OrigAA(Logic.PPC.getAAResultsFromFunction(oldFunc_)), TA(TA_), omp(omp),
+        width(width) {
     if (oldFunc_->getSubprogram()) {
       assert(originalToNewFn_.hasMD());
     }
@@ -1465,6 +1473,31 @@ public:
         getNewFromOriginal(Builder2.getCurrentDebugLocation()));
     Builder2.setFastMathFlags(getFast());
   }
+
+  Type *getTypeForVectorMode(Type *ty) {
+    return getTypeForVectorMode(ty, width);
+  }
+
+  static Type *getTypeForVectorMode(Type *ty, unsigned int width) {
+    if (ty->isIntegerTy() || ty->isFloatingPointTy()) {
+      return FixedVectorType::get(ty, width);
+    } else if (ty->isPointerTy()) {
+      PointerType *pty = dyn_cast<PointerType>(ty);
+      return PointerType::get(
+          getTypeForVectorMode(pty->getPointerElementType(), width),
+          pty->getAddressSpace());
+    } else if (ty->isVectorTy()) {
+      VectorType *vty = dyn_cast<VectorType>(ty);
+      ElementCount ec = vty->getElementCount() * width;
+      return VectorType::get(vty->getElementType(), ec);
+    } else {
+      SmallVector<Type *, 4> tys;
+      for (auto it = ty->subtype_begin(); it != ty->subtype_end(); it++) {
+        tys.push_back(getTypeForVectorMode(*it, width));
+      }
+      return StructType::get(ty->getContext(), tys);
+    }
+  }
 };
 
 class DiffeGradientUtils : public GradientUtils {
@@ -1474,10 +1507,10 @@ class DiffeGradientUtils : public GradientUtils {
                      const SmallPtrSetImpl<Value *> &constantvalues_,
                      const SmallPtrSetImpl<Value *> &returnvals_,
                      DIFFE_TYPE ActiveReturn, ValueToValueMapTy &origToNew_,
-                     DerivativeMode mode, bool omp)
+                     DerivativeMode mode, size_t width, bool omp)
       : GradientUtils(Logic, newFunc_, oldFunc_, TLI, TA, invertedPointers_,
                       constantvalues_, returnvals_, ActiveReturn, origToNew_,
-                      mode, omp) {
+                      mode, width, omp) {
     assert(reverseBlocks.size() == 0);
     if (mode == DerivativeMode::ForwardMode ||
         mode == DerivativeMode::ForwardModeSplit ||
@@ -1500,9 +1533,9 @@ public:
   bool FreeMemory;
   ValueMap<const Value *, TrackingVH<AllocaInst>> differentials;
   static DiffeGradientUtils *
-  CreateFromClone(EnzymeLogic &Logic, DerivativeMode mode, Function *todiff,
-                  TargetLibraryInfo &TLI, TypeAnalysis &TA, DIFFE_TYPE retType,
-                  bool diffeReturnArg,
+  CreateFromClone(EnzymeLogic &Logic, DerivativeMode mode, size_t width,
+                  Function *todiff, TargetLibraryInfo &TLI, TypeAnalysis &TA,
+                  DIFFE_TYPE retType, bool diffeReturnArg,
                   const std::vector<DIFFE_TYPE> &constant_args,
                   ReturnType returnValue, Type *additionalArg, bool omp);
 
@@ -1514,24 +1547,29 @@ private:
     if (auto inst = dyn_cast<Instruction>(val))
       assert(inst->getParent()->getParent() == oldFunc);
     assert(inversionAllocs);
+
+    // TODO: write utility function, that derives type for vector mode
+
+    Type *type = mode == DerivativeMode::ForwardModeVector
+                     ? getTypeForVectorMode(val->getType())
+                     : val->getType();
     if (differentials.find(val) == differentials.end()) {
       IRBuilder<> entryBuilder(inversionAllocs);
       entryBuilder.setFastMathFlags(getFast());
-      differentials[val] = entryBuilder.CreateAlloca(val->getType(), nullptr,
-                                                     val->getName() + "'de");
+      differentials[val] =
+          entryBuilder.CreateAlloca(type, nullptr, val->getName() + "'de");
       auto Alignment =
-          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(
-              val->getType());
+          oldFunc->getParent()->getDataLayout().getPrefTypeAlignment(type);
 #if LLVM_VERSION_MAJOR >= 10
       differentials[val]->setAlignment(Align(Alignment));
 #else
       differentials[val]->setAlignment(Alignment);
 #endif
-      entryBuilder.CreateStore(Constant::getNullValue(val->getType()),
+      entryBuilder.CreateStore(Constant::getNullValue(type),
                                differentials[val]);
     }
     assert(cast<PointerType>(differentials[val]->getType())->getElementType() ==
-           val->getType());
+           type);
     return differentials[val];
   }
 

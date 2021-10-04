@@ -381,8 +381,15 @@ static inline DIFFE_TYPE whatType(llvm::Type *arg, DerivativeMode mode,
   } else if (arg->isIntOrIntVectorTy() || arg->isFunctionTy()) {
     return DIFFE_TYPE::CONSTANT;
   } else if (arg->isFPOrFPVectorTy()) {
-    return mode == DerivativeMode::ForwardMode ? DIFFE_TYPE::DUP_ARG
-                                               : DIFFE_TYPE::OUT_DIFF;
+    switch (mode) {
+    case DerivativeMode::ForwardMode:
+    case DerivativeMode::ForwardModeVector:
+      return DIFFE_TYPE::DUP_ARG;
+    case DerivativeMode::ReverseModeGradient:
+    case DerivativeMode::ReverseModePrimal:
+    case DerivativeMode::ReverseModeCombined:
+      return DIFFE_TYPE::OUT_DIFF;
+    }
   } else {
     assert(arg);
     llvm::errs() << "arg: " << *arg << "\n";

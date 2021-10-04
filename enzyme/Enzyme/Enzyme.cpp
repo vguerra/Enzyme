@@ -329,7 +329,7 @@ public:
     std::vector<DIFFE_TYPE> constants;
     SmallVector<Value *, 2> args;
 
-    if (CI->paramHasAttr(0, Attribute::StructRet)) {
+    if (CI->hasStructRetAttr()) {
       fn = CI->getArgOperand(1);
     }
 
@@ -357,11 +357,19 @@ public:
     auto FT = cast<Function>(fn)->getFunctionType();
     assert(fn);
 
-    bool sret = CI->paramHasAttr(0, Attribute::StructRet) ||
+    bool sret = CI->hasStructRetAttr() ||
                 cast<Function>(fn)->hasParamAttribute(0, Attribute::StructRet);
+
+    /// Actual return type (including struct return)
+    Type *returnType =
+        CI->hasStructRetAttr()
+            ? dyn_cast<PointerType>(CI->getArgOperand(0)->getType())
+                  ->getPointerElementType()
+            : CI->getType();
 
     IRBuilder<> Builder(CI);
 
+    std::optional<unsigned int> width;
     unsigned truei = 0;
     if (cast<Function>(fn)->hasParamAttribute(0, Attribute::StructRet)) {
       Type *fnsrety = cast<PointerType>(FT->getParamType(0));
@@ -380,7 +388,8 @@ public:
       primal->insertBefore(CI);
 
       Value *shadow;
-      if (mode == DerivativeMode::ForwardMode) {
+      if (mode == DerivativeMode::ForwardMode ||
+          mode == DerivativeMode::ForwardModeVector) {
         shadow = CI->getArgOperand(0);
       } else {
         shadow = CI->getArgOperand(1);
@@ -407,6 +416,7 @@ public:
 
     bool differentialReturn =
         mode != DerivativeMode::ForwardMode &&
+        mode != DerivativeMode::ForwardModeVector &&
         mode != DerivativeMode::ReverseModePrimal &&
         cast<Function>(fn)->getReturnType()->isFPOrFPVectorTy();
 
@@ -606,7 +616,8 @@ public:
           return false;
         }
         Value *res = CI->getArgOperand(i);
-        if (PTy != res->getType()) {
+        if (PTy != res->getType() &&
+            mode != DerivativeMode::ForwardModeVector) {
           if (auto ptr = dyn_cast<PointerType>(res->getType())) {
             if (auto PT = dyn_cast<PointerType>(PTy)) {
               if (ptr->getAddressSpace() != PT->getAddressSpace()) {
@@ -640,7 +651,81 @@ public:
           }
           res = Builder.CreateBitCast(res, PTy);
         }
-        args.push_back(res);
+
+        // Convert struct used in C calling convention to vector type for
+        // internal use.
+        if (mode == DerivativeMode::ForwardModeVector) {
+          if (PointerType *pty = dyn_cast<PointerType>(res->getType())) {
+            if (StructType *sty =
+                    dyn_cast<StructType>(pty->getPointerElementType())) {
+              assert(!width || *width == sty->getStructNumElements());
+              width = sty->getStructNumElements();
+              if (CI->paramHasAttr(i, Attribute::ByVal)) {
+                Value *vec = UndefValue::get(
+                    FixedVectorType::get(sty->getStructElementType(0), *width));
+                for (unsigned int i = 0; i < *width; i++) {
+                  Value *ep = Builder.CreateStructGEP(res, i);
+                  Value *elem =
+                      Builder.CreateLoad(sty->getStructElementType(i), ep);
+                  vec = Builder.CreateInsertElement(vec, elem, i);
+                }
+                args.push_back(vec);
+              } else {
+                IRBuilder<> PostCallBuilder(CI->getNextNode());
+                Value *ptr = Builder.CreateAlloca(
+                    FixedVectorType::get(sty->getStructElementType(0), *width));
+
+                Value *vec = UndefValue::get(
+                    FixedVectorType::get(sty->getStructElementType(0), *width));
+                for (unsigned int i = 0; i < *width; i++) {
+                  Value *ep = Builder.CreateStructGEP(res, i);
+                  Value *elem =
+                      Builder.CreateLoad(sty->getStructElementType(i), ep);
+                  vec = Builder.CreateInsertElement(vec, elem, i);
+                }
+                Builder.CreateStore(vec, ptr);
+                args.push_back(vec);
+
+                Value *pc = PostCallBuilder.CreateLoad(ptr);
+                for (unsigned int i = 0; i < *width; i++) {
+                  Value *ep = PostCallBuilder.CreateStructGEP(res, i);
+                  Value *elem = PostCallBuilder.CreateExtractElement(pc, i);
+                  PostCallBuilder.CreateStore(elem, ep);
+                }
+              }
+            }
+          } else if (ArrayType *aty = dyn_cast<ArrayType>(res->getType())) {
+            assert(!width || *width == aty->getNumElements());
+            width = aty->getNumElements();
+            Value *vec = UndefValue::get(
+                FixedVectorType::get(aty->getArrayElementType(), *width));
+            for (unsigned int i = 0; i < aty->getNumElements(); i++) {
+              Value *elem = Builder.CreateExtractValue(res, i);
+              vec = Builder.CreateInsertElement(vec, elem, i);
+            }
+            args.push_back(vec);
+          } else {
+            llvm::errs()
+                << "Cannot determine vector width. This is most likely due to "
+                   "clang passing the struct representing our vector as single "
+                   "arguments. Trying to guess vector width based on return "
+                   "type...\n";
+            assert(!width || *width == CI->getType()->getStructNumElements());
+            width = CI->getType()->getStructNumElements();
+            Value *vec = UndefValue::get(
+                FixedVectorType::get(returnType->getStructElementType(0),
+                                     returnType->getStructNumElements()));
+
+            for (unsigned int j = 0; j < *width; j++) {
+              Value *elem = CI->getArgOperand(i + j);
+              vec = Builder.CreateInsertElement(vec, elem, j);
+            }
+            args.push_back(vec);
+            i += *width;
+          }
+        } else {
+          args.push_back(res);
+        }
       }
 
       ++truei;
@@ -681,11 +766,21 @@ public:
     const AugmentedReturn *aug;
     switch (mode) {
     case DerivativeMode::ForwardModeVector:
+      if (width) {
+        newFunc = Logic.CreateForwardDiff(
+            cast<Function>(fn), retType, constants, TLI, TA,
+            /*should return*/ false, /*dretPtr*/ false, mode,
+            /* width */ *width,
+            /*addedType*/ nullptr, type_args, volatile_args, PostOpt);
+      } else {
+        report_fatal_error("Misssing vector width for vector mode");
+      }
+      break;
     case DerivativeMode::ForwardModeSplit:
     case DerivativeMode::ForwardMode:
       newFunc = Logic.CreateForwardDiff(
           cast<Function>(fn), retType, constants, TLI, TA,
-          /*should return*/ false, /*dretPtr*/ false, mode,
+          /*should return*/ false, /*dretPtr*/ false, mode, /* width */ 1,
           /*addedType*/ nullptr, type_args, volatile_args, PostOpt);
       break;
     case DerivativeMode::ReverseModeCombined:
@@ -865,10 +960,23 @@ public:
     StructType *CIsty = dyn_cast<StructType>(CI->getType());
     StructType *diffretsty = dyn_cast<StructType>(diffret->getType());
 
+    // Adapt the returned vector type to the struct type expected by our calling
+    // convention.
+    if (mode == DerivativeMode::ForwardModeVector) {
+      if (StructType *sty = dyn_cast_or_null<StructType>(returnType)) {
+        Value *agg = ConstantAggregateZero::get(sty);
+
+        for (unsigned int i = 0; i < sty->getNumElements(); i++) {
+          agg = Builder.CreateInsertValue(
+              agg, Builder.CreateExtractElement(diffret, i), {i});
+        }
+        diffret = agg;
+      }
+    }
+
     if (!diffret->getType()->isEmptyTy() && !diffret->getType()->isVoidTy() &&
         !CI->getType()->isEmptyTy() &&
-        (!CI->getType()->isVoidTy() ||
-         CI->paramHasAttr(0, Attribute::StructRet))) {
+        (!CI->getType()->isVoidTy() || CI->hasStructRetAttr())) {
       if (diffret->getType() == CI->getType()) {
         CI->replaceAllUsesWith(diffret);
       } else if (CIsty && diffretsty && CIsty->isLayoutIdentical(diffretsty)) {
@@ -894,9 +1002,10 @@ public:
           llvm::errs() << *CI << " - " << *diffret << "\n";
           assert(0 && " what");
         }
-      } else if (CI->paramHasAttr(0, Attribute::StructRet)) {
+      } else if (CI->hasStructRetAttr()) {
         Value *sret = CI->getArgOperand(0);
 
+        // Assign results to struct allocated at the call site.
         if (StructType *st = cast<StructType>(diffret->getType())) {
           for (unsigned int i = 0; i < st->getNumElements(); i++) {
             Builder.CreateStore(Builder.CreateExtractValue(diffret, {i}),
@@ -1028,6 +1137,7 @@ public:
               Fn->getName().contains("__enzyme_call_inactive") ||
               Fn->getName().contains("__enzyme_autodiff") ||
               Fn->getName().contains("__enzyme_fwddiff") ||
+              Fn->getName().contains("__enzyme_vecdiff") ||
               Fn->getName().contains("__enzyme_augmentfwd") ||
               Fn->getName().contains("__enzyme_augmentsize") ||
               Fn->getName().contains("__enzyme_reverse")))
@@ -1283,6 +1393,12 @@ public:
         } else if (Fn->getName().contains("__enzyme_fwddiff")) {
           enableEnzyme = true;
           mode = DerivativeMode::ForwardMode;
+        } else if (Fn->getName().contains("__enzyme_vecdiff")) {
+          enableEnzyme = true;
+          mode = DerivativeMode::ForwardModeVector;
+        } else if (Fn->getName().contains("__enzyme_fwdvectordiff")) {
+          enableEnzyme = true;
+          mode = DerivativeMode::ForwardModeVector;
         } else if (Fn->getName().contains("__enzyme_augmentfwd")) {
           enableEnzyme = true;
           mode = DerivativeMode::ReverseModePrimal;

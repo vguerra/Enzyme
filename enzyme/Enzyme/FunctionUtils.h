@@ -59,16 +59,15 @@ public:
 
   llvm::AAResults &getAAResultsFromFunction(llvm::Function *NewF);
 
-  llvm::Function *
-  CloneFunctionWithReturns(DerivativeMode mode, llvm::Function *&F,
-                           llvm::ValueToValueMapTy &ptrInputs,
-                           const std::vector<DIFFE_TYPE> &constant_args,
-                           llvm::SmallPtrSetImpl<llvm::Value *> &constants,
-                           llvm::SmallPtrSetImpl<llvm::Value *> &nonconstant,
-                           llvm::SmallPtrSetImpl<llvm::Value *> &returnvals,
-                           ReturnType returnValue, llvm::Twine name,
-                           llvm::ValueToValueMapTy *VMapO, bool diffeReturnArg,
-                           llvm::Type *additionalArg = nullptr);
+  llvm::Function *CloneFunctionWithReturns(
+      DerivativeMode mode, size_t width, llvm::Function *&F,
+      llvm::ValueToValueMapTy &ptrInputs,
+      const std::vector<DIFFE_TYPE> &constant_args,
+      llvm::SmallPtrSetImpl<llvm::Value *> &constants,
+      llvm::SmallPtrSetImpl<llvm::Value *> &nonconstant,
+      llvm::SmallPtrSetImpl<llvm::Value *> &returnvals, ReturnType returnValue,
+      llvm::Twine name, llvm::ValueToValueMapTy *VMapO, bool diffeReturnArg,
+      llvm::Type *additionalArg = nullptr);
 
   void ReplaceReallocs(llvm::Function *NewF, bool mem2reg = false);
   void AlwaysInline(llvm::Function *NewF);
