@@ -6506,10 +6506,14 @@ public:
             dfuncName, Builder2.getVoidTy(), Builder2.getInt32Ty(), innerType,
             call.getArgOperand(2)->getType(), Builder2.getInt32Ty());
         SmallVector<Value *, 4> args1 = {
-            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)), Builder2), // n
-            lookup(gutils->getNewFromOriginal(orig->getArgOperand(1)), Builder2), // sa
-            lookup(gutils->invertPointerM(orig->getArgOperand(2), Builder2), Builder2), // [x]
-            lookup(gutils->getNewFromOriginal(orig->getArgOperand(3)), Builder2)}; // incx
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
+                   Builder2), // n
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(1)),
+                   Builder2), // sa
+            lookup(gutils->invertPointerM(orig->getArgOperand(2), Builder2),
+                   Builder2), // [x]
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(3)),
+                   Builder2)}; // incx
         Builder2.CreateCall(derivcall, args1);
       }
 
