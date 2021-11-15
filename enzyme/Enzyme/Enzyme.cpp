@@ -684,7 +684,11 @@ public:
                   vec = Builder.CreateInsertElement(vec, elem, i);
                 }
                 Builder.CreateStore(vec, ptr);
-                args.push_back(vec);
+                if (PTy->isPointerTy()) {
+                  args.push_back(ptr);
+                } else {
+                  args.push_back(vec);
+                }
 
                 Value *pc = PostCallBuilder.CreateLoad(ptr);
                 for (unsigned int i = 0; i < *width; i++) {
