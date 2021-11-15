@@ -1548,8 +1548,6 @@ private:
       assert(inst->getParent()->getParent() == oldFunc);
     assert(inversionAllocs);
 
-    // TODO: write utility function, that derives type for vector mode
-
     Type *type = mode == DerivativeMode::ForwardModeVector
                      ? getTypeForVectorMode(val->getType())
                      : val->getType();
