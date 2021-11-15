@@ -708,6 +708,11 @@ public:
               vec = Builder.CreateInsertElement(vec, elem, i);
             }
             args.push_back(vec);
+          } else if (FixedVectorType *vty =
+                         dyn_cast<FixedVectorType>(res->getType())) {
+            assert(!width || *width == vty->getNumElements());
+            width = vty->getNumElements();
+            args.push_back(res);
           } else {
             llvm::errs()
                 << "Cannot determine vector width. This is most likely due to "
