@@ -8339,8 +8339,10 @@ public:
       if (subretused && subretType != DIFFE_TYPE::CONSTANT) {
         primal = Builder2.CreateExtractValue(diffes, 0);
         diffe = Builder2.CreateExtractValue(diffes, 1);
-      } else if (!newcalled->getReturnType()->isVoidTy()) {
+      } else if (subretType != DIFFE_TYPE::CONSTANT) {
         diffe = diffes;
+      } else if (!newcalled->getReturnType()->isVoidTy()) {
+        primal = diffes;
       }
 
       if (ifound != gutils->invertedPointers.end()) {
@@ -8363,10 +8365,10 @@ public:
           }
           gutils->erase(newcall);
         } else if (diffe) {
-          gutils->replaceAWithB(newcall, diffe);
-          if (!gutils->isConstantValue(&call)) {
-            setDiffe(&call, diffe, Builder2);
-          }
+          setDiffe(&call, diffe, Builder2);
+          eraseIfUnused(*orig, /*erase*/ true, /*check*/ false);
+        } else if (primal) {
+          gutils->replaceAWithB(newcall, primal);
           gutils->erase(newcall);
         } else {
           eraseIfUnused(*orig, /*erase*/ true, /*check*/ false);
