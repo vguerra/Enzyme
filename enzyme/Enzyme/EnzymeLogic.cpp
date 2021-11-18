@@ -2365,8 +2365,9 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
   return AugmentedCachedFunctions.find(tup)->second;
 }
 
-void createTerminator(TypeResults &TR, DiffeGradientUtils *gutils,
-                      BasicBlock *oBB, DIFFE_TYPE retType, ReturnType retVal) {
+void createTerminator(DerivativeMode mode, TypeResults &TR,
+                      DiffeGradientUtils *gutils, BasicBlock *oBB,
+                      DIFFE_TYPE retType, ReturnType retVal) {
 
   BasicBlock *nBB = cast<BasicBlock>(gutils->getNewFromOriginal(oBB));
   assert(nBB);
@@ -2390,7 +2391,10 @@ void createTerminator(TypeResults &TR, DiffeGradientUtils *gutils,
       } else if (!gutils->isConstantValue(ret)) {
         toret = gutils->diffe(ret, nBuilder);
       } else {
-        toret = Constant::getNullValue(ret->getType());
+        Type *retTy = mode == DerivativeMode::ForwardModeVector
+                          ? gutils->getTypeForVectorMode(ret->getType())
+                          : ret->getType();
+        toret = Constant::getNullValue(retTy);
       }
 
       break;
@@ -3928,7 +3932,7 @@ Function *EnzymeLogic::CreateForwardDiff(
       maker->visit(&*it);
     }
 
-    createTerminator(TR, gutils, &oBB, retType, retVal);
+    createTerminator(mode, TR, gutils, &oBB, retType, retVal);
   }
 
   gutils->eraseFictiousPHIs();
