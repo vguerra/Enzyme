@@ -1642,13 +1642,12 @@ public:
       Value *orig_inserted = IVI.getInsertedValueOperand();
       Value *orig_agg = IVI.getAggregateOperand();
 
-      StructType *sty = dyn_cast<StructType>(orig_agg->getType());
       Type *insertedType =
           Mode == DerivativeMode::ForwardModeVector
               ? gutils->getTypeForVectorMode(orig_inserted->getType())
               : orig_inserted->getType();
       Type *diffeType = Mode == DerivativeMode::ForwardModeVector
-                            ? gutils->getTypeForVectorMode(sty)
+                            ? gutils->getTypeForVectorMode(orig_agg->getType())
                             : orig_agg->getType();
 
       Value *diff_inserted = gutils->isConstantValue(orig_inserted)
