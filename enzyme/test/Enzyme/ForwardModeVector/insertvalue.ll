@@ -22,3 +22,15 @@ entry:
   %0 = tail call %struct.Gradients (double (double)*, ...) @__enzyme_fwdvectordiff(double (double)* nonnull @tester, double %x, [3 x double] [double 1.0, double 2.0, double 3.0])
   ret %struct.Gradients %0
 }
+
+; CHECK: define internal <3 x double> @fwdvectordiffetester(double %x, <3 x double> %"x'")
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   %.splatinsert = insertelement <3 x double> poison, double %x, i32 0
+; CHECK-NEXT:   %.splat = shufflevector <3 x double> %.splatinsert, <3 x double> poison, <3 x i32> zeroinitializer
+; CHECK-NEXT:   %0 = fmul fast <3 x double> %"x'", %.splat
+; CHECK-NEXT:   %.splatinsert1 = insertelement <3 x double> poison, double %x, i32 0
+; CHECK-NEXT:   %.splat2 = shufflevector <3 x double> %.splatinsert1, <3 x double> poison, <3 x i32> zeroinitializer
+; CHECK-NEXT:   %1 = fmul fast <3 x double> %"x'", %.splat2
+; CHECK-NEXT:   %2 = fadd fast <3 x double> %0, %1
+; CHECK-NEXT:   ret <3 x double> %2
+; CHECK-NEXT: }

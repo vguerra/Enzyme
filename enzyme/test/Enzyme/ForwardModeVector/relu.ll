@@ -36,3 +36,25 @@ declare double @__enzyme_fwddiff(double (double)*, ...) #0
 attributes #0 = { nounwind }
 attributes #1 = { nounwind readnone noinline }
 
+
+; CHECK: define dso_local %struct.Gradients @drelu(double %x)
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   %cmp.i = fcmp fast ogt double %x, 0.000000e+00
+; CHECK-NEXT:   br i1 %cmp.i, label %cond.true.i, label %fwdvectordifferelu.exit
+; CHECK: cond.true.i:                                      ; preds = %entry
+; CHECK-NEXT:   %0 = call fast <2 x double> @fwdvectordiffef(double %x, <2 x double> <double 0.000000e+00, double 1.000000e+00>)
+; CHECK-NEXT:   br label %fwdvectordifferelu.exit
+; CHECK: fwdvectordifferelu.exit:                          ; preds = %entry, %cond.true.i
+; CHECK-NEXT:   %"cond'.i" = phi fast <2 x double> [ %0, %cond.true.i ], [ zeroinitializer, %entry ]
+; CHECK-NEXT:   %1 = extractelement <2 x double> %"cond'.i", i64 0
+; CHECK-NEXT:   %2 = insertvalue %struct.Gradients zeroinitializer, double %1, 0
+; CHECK-NEXT:   %3 = extractelement <2 x double> %"cond'.i", i64 1
+; CHECK-NEXT:   %4 = insertvalue %struct.Gradients %2, double %3, 1
+; CHECK-NEXT:   ret %struct.Gradients %4
+; CHECK-NEXT: }
+
+
+; CHECK: define internal <2 x double> @fwdvectordiffef(double %x, <2 x double> %"x'")
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   ret <2 x double> %"x'"
+; CHECK-NEXT: }
