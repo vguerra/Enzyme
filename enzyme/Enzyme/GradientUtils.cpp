@@ -3007,7 +3007,10 @@ Value *GradientUtils::invertPointerM(Value *const oval, IRBuilder<> &BuilderM,
   } else if (auto arg = dyn_cast<CastInst>(oval)) {
     IRBuilder<> bb(getNewFromOriginal(arg));
     Value *invertOp = invertPointerM(arg->getOperand(0), bb);
-    Value *shadow = bb.CreateCast(arg->getOpcode(), invertOp, arg->getDestTy(),
+    Type *shadowTy = mode == DerivativeMode::ForwardModeVector
+                         ? getTypeForVectorMode(arg->getDestTy())
+                         : arg->getDestTy();
+    Value *shadow = bb.CreateCast(arg->getOpcode(), invertOp, shadowTy,
                                   arg->getName() + "'ipc");
     invertedPointers.insert(
         std::make_pair((const Value *)oval, InvertedPointerVH(this, shadow)));
