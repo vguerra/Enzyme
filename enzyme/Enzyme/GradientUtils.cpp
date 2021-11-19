@@ -2852,9 +2852,12 @@ Value *GradientUtils::invertPointerM(Value *const oval, IRBuilder<> &BuilderM,
         endCheck:;
           if (!seen) {
             IRBuilder<> bb(inversionAllocs);
+            Type *allocaTy = mode == DerivativeMode::ForwardModeVector
+                                 ? getTypeForVectorMode(arg->getValueType())
+                                 : arg->getValueType();
             AllocaInst *antialloca = bb.CreateAlloca(
-                arg->getValueType(), arg->getType()->getPointerAddressSpace(),
-                nullptr, arg->getName() + "'ipa");
+                allocaTy, arg->getType()->getPointerAddressSpace(), nullptr,
+                arg->getName() + "'ipa");
             invertedPointers.insert(std::make_pair(
                 (const Value *)oval, InvertedPointerVH(this, antialloca)));
 
@@ -2902,7 +2905,10 @@ Value *GradientUtils::invertPointerM(Value *const oval, IRBuilder<> &BuilderM,
             }
 #endif
             memset->addParamAttr(0, Attribute::NonNull);
-            assert(antialloca->getType() == arg->getType());
+            assert(mode == DerivativeMode::ForwardModeVector &&
+                       antialloca->getType() ==
+                           getTypeForVectorMode(arg->getType()) ||
+                   antialloca->getType() == arg->getType());
             return antialloca;
           }
         }
