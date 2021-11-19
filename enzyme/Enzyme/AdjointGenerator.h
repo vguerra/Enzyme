@@ -846,10 +846,15 @@ public:
         IRBuilder<> Builder2(&I);
         getForwardBuilder(Builder2);
 
-        Value *diff = constantval ? Constant::getNullValue(valType)
+        Type *diffeTy = Mode == DerivativeMode::ForwardModeVector
+                            ? gutils->getTypeForVectorMode(valType)
+                            : valType;
+
+        Value *diff = constantval ? Constant::getNullValue(diffeTy)
                                   : diffe(orig_val, Builder2);
         gutils->setPtrDiffe(orig_ptr, diff, Builder2, align, isVolatile,
                             ordering, syncScope, mask);
+
         break;
       }
       }

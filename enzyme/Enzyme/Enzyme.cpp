@@ -971,7 +971,8 @@ public:
 
     // Adapt the returned vector type to the struct type expected by our calling
     // convention.
-    if (mode == DerivativeMode::ForwardModeVector) {
+    if (mode == DerivativeMode::ForwardModeVector &&
+        !diffret->getType()->isEmptyTy() && !diffret->getType()->isVoidTy()) {
       if (StructType *sty = dyn_cast_or_null<StructType>(returnType)) {
         Value *agg = ConstantAggregateZero::get(sty);
 
