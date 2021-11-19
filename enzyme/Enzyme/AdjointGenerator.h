@@ -903,7 +903,11 @@ public:
       IRBuilder<> phiBuilder(&phi);
       getForwardBuilder(phiBuilder);
 
-      auto newPhi = phiBuilder.CreatePHI(phi.getType(), 1, phi.getName() + "'");
+      Type *diffeType = Mode == DerivativeMode::ForwardModeVector
+                            ? gutils->getTypeForVectorMode(phi.getType())
+                            : phi.getType();
+
+      auto newPhi = phiBuilder.CreatePHI(diffeType, 1, phi.getName() + "'");
       for (unsigned int i = 0; i < phi.getNumIncomingValues(); ++i) {
         auto val = phi.getIncomingValue(i);
         auto block = phi.getIncomingBlock(i);
@@ -913,7 +917,7 @@ public:
         pBuilder.setFastMathFlags(getFast());
 
         if (gutils->isConstantValue(val)) {
-          newPhi->addIncoming(Constant::getNullValue(val->getType()), newBlock);
+          newPhi->addIncoming(Constant::getNullValue(diffeType), newBlock);
         } else {
           auto diff = diffe(val, pBuilder);
           newPhi->addIncoming(diff, newBlock);
