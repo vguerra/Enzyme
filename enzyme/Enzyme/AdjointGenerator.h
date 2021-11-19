@@ -2401,6 +2401,13 @@ public:
       auto ddst = gutils->invertPointerM(orig_dst, Builder2);
       auto dsrc = gutils->invertPointerM(orig_src, Builder2);
 
+      if (Mode == DerivativeMode::ForwardModeVector) {
+        // FIXME: This is not always correct
+        new_size =
+            Builder2.CreateMul(new_size, ConstantInt::get(new_size->getType(),
+                                                          gutils->getWidth()));
+      }
+
       auto call =
           Builder2.CreateMemCpy(ddst, dstAlign, dsrc, srcAlign, new_size);
       call->setAttributes(MTI.getAttributes());
