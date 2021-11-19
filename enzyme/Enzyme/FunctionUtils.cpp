@@ -1554,21 +1554,24 @@ Function *PreProcessCache::CloneFunctionWithReturns(
     DerivativeMode mode, size_t width, Function *&F,
     ValueToValueMapTy &ptrInputs, const std::vector<DIFFE_TYPE> &constant_args,
     SmallPtrSetImpl<Value *> &constants, SmallPtrSetImpl<Value *> &nonconstant,
-    SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue, Twine name,
-    ValueToValueMapTy *VMapO, bool diffeReturnArg, llvm::Type *additionalArg) {
+    SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue,
+    DIFFE_TYPE returnType, Twine name, ValueToValueMapTy *VMapO,
+    bool diffeReturnArg, llvm::Type *additionalArg) {
   assert(!F->empty());
   F = preprocessForClone(F, mode);
   std::vector<Type *> RetTypes;
   if (returnValue == ReturnType::ArgsWithReturn ||
       returnValue == ReturnType::Return) {
-    if (mode == DerivativeMode::ForwardModeVector) {
+    if (mode == DerivativeMode::ForwardModeVector &&
+        returnType != DIFFE_TYPE::CONSTANT) {
       RetTypes.push_back(FixedVectorType::get(F->getReturnType(), width));
     } else {
       RetTypes.push_back(F->getReturnType());
     }
   } else if (returnValue == ReturnType::ArgsWithTwoReturns ||
              returnValue == ReturnType::TwoReturns) {
-    if (mode == DerivativeMode::ForwardModeVector) {
+    if (mode == DerivativeMode::ForwardModeVector &&
+        returnType != DIFFE_TYPE::CONSTANT) {
       RetTypes.push_back(F->getReturnType());
       RetTypes.push_back(FixedVectorType::get(F->getReturnType(), width));
     } else {

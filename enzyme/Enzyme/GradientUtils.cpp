@@ -2460,8 +2460,8 @@ GradientUtils *GradientUtils::CreateFromClone(
       DerivativeMode::ReverseModePrimal, /* width */ 1, todiff,
       invertedPointers, constant_args, constant_values, nonconstant_values,
       returnvals,
-      /*returnValue*/ returnValue, "fakeaugmented_" + todiff->getName(),
-      &originalToNew,
+      /*returnValue*/ returnValue, retType,
+      "fakeaugmented_" + todiff->getName(), &originalToNew,
       /*diffeReturnArg*/ false, /*additionalArg*/ nullptr);
 
   auto res = new GradientUtils(
@@ -2510,8 +2510,8 @@ DiffeGradientUtils *DiffeGradientUtils::CreateFromClone(
 
   auto newFunc = Logic.PPC.CloneFunctionWithReturns(
       mode, width, todiff, invertedPointers, constant_args, constant_values,
-      nonconstant_values, returnvals, returnValue, prefix + todiff->getName(),
-      &originalToNew,
+      nonconstant_values, returnvals, returnValue, retType,
+      prefix + todiff->getName(), &originalToNew,
       /*diffeReturnArg*/ diffeReturnArg, additionalArg);
   auto res = new DiffeGradientUtils(
       Logic, newFunc, todiff, TLI, TA, invertedPointers, constant_values,
