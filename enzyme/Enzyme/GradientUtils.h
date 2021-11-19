@@ -1490,12 +1490,18 @@ public:
       VectorType *vty = dyn_cast<VectorType>(ty);
       ElementCount ec = vty->getElementCount() * width;
       return VectorType::get(vty->getElementType(), ec);
-    } else {
+    } else if (auto sty = dyn_cast<StructType>(ty)) {
       SmallVector<Type *, 4> tys;
-      for (auto it = ty->subtype_begin(); it != ty->subtype_end(); it++) {
+      for (auto it = sty->subtype_begin(); it != ty->subtype_end(); it++) {
         tys.push_back(getTypeForVectorMode(*it, width));
       }
       return StructType::get(ty->getContext(), tys);
+    } else if (auto aty = dyn_cast<ArrayType>(ty)) {
+      return ArrayType::get(getTypeForVectorMode(aty->getElementType(), width),
+                            aty->getNumElements());
+    } else {
+      llvm::errs() << ty << "\n";
+      report_fatal_error("Cannot deduce type for vector mode");
     }
   }
 };
