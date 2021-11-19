@@ -698,6 +698,16 @@ public:
                 }
               }
             }
+          } else if (StructType *sty = dyn_cast<StructType>(res->getType())) {
+            assert(!width || *width == sty->getNumElements());
+            width = sty->getNumElements();
+            Value *vec = UndefValue::get(
+                FixedVectorType::get(sty->getStructElementType(0), *width));
+            for (unsigned int i = 0; i < *width; i++) {
+              Value *elem = Builder.CreateExtractValue(res, i);
+              vec = Builder.CreateInsertElement(vec, elem, i);
+            }
+            args.push_back(vec);
           } else if (ArrayType *aty = dyn_cast<ArrayType>(res->getType())) {
             assert(!width || *width == aty->getNumElements());
             width = aty->getNumElements();
