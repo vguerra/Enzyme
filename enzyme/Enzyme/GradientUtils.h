@@ -1195,9 +1195,11 @@ public:
         if (isa<LoadInst>(inst)) {
           IRBuilder<> BuilderZ(inst);
           getForwardBuilder(BuilderZ);
-
-          PHINode *anti = BuilderZ.CreatePHI(inst->getType(), 1,
-                                             inst->getName() + "'il_phi");
+          Type *antiTy = mode == DerivativeMode::ForwardModeVector
+                             ? getTypeForVectorMode(inst->getType())
+                             : inst->getType();
+          PHINode *anti =
+              BuilderZ.CreatePHI(antiTy, 1, inst->getName() + "'il_phi");
           invertedPointers.insert(std::make_pair(
               (const Value *)inst, InvertedPointerVH(this, anti)));
           continue;
@@ -1224,9 +1226,11 @@ public:
 
         IRBuilder<> BuilderZ(inst);
         getForwardBuilder(BuilderZ);
-
+        Type *antiTy = mode == DerivativeMode::ForwardModeVector
+                           ? getTypeForVectorMode(inst->getType())
+                           : inst->getType();
         PHINode *anti =
-            BuilderZ.CreatePHI(op->getType(), 1, op->getName() + "'ip_phi");
+            BuilderZ.CreatePHI(antiTy, 1, op->getName() + "'ip_phi");
         invertedPointers.insert(
             std::make_pair((const Value *)inst, InvertedPointerVH(this, anti)));
 

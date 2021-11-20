@@ -28,3 +28,15 @@ attributes #0 = { nounwind uwtable }
 attributes #1 = { argmemonly nounwind }
 attributes #2 = { noinline nounwind uwtable }
 
+
+; CHECK: define internal void @fwdvectordiffememcpy_float(double* nocapture %dst, <3 x double>* nocapture %"dst'", double* nocapture readonly %src, <3 x double>* nocapture %"src'", i64 %num)
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   %0 = bitcast double* %dst to i8*
+; CHECK-NEXT:   %1 = bitcast double* %src to i8*
+; CHECK-NEXT:   tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* align 1 %0, i8* align 1 %1, i64 %num, i1 false)
+; CHECK-NEXT:   %2 = mul i64 %num, 3
+; CHECK-NEXT:   %3 = bitcast <3 x double>* %"dst'" to i8*
+; CHECK-NEXT:   %4 = bitcast <3 x double>* %"src'" to i8*
+; CHECK-NEXT:   tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* align 1 %3, i8* align 1 %4, i64 %2, i1 false)
+; CHECK-NEXT:   ret void
+; CHECK-NEXT: }
