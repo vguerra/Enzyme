@@ -1,0 +1,207 @@
+; RUN: %opt < %s %loadEnzyme -enzyme -enzyme-preopt=false -mem2reg -S | FileCheck %s
+
+%struct.Gradients = type { {float, float, float}, {float, float, float} }
+%struct.InGradients = type { float, float, float, float, float, float, float, float }
+
+declare %struct.Gradients @__enzyme_fwdvectordiff({float, float, float} (<4 x float>)*, <4 x float>, %struct.InGradients)
+
+define {float, float, float} @square(<4 x float> %x) {
+entry:
+  %vec = insertelement <4 x float> %x, float 1.0, i32 3
+  %sq = fmul <4 x float> %x, %x
+  %cb = fmul <4 x float> %sq, %x          
+  %id = shufflevector <4 x float> %sq, <4 x float> %cb, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+  %res1 = extractelement <4 x float> %id, i32 1
+  %res2 = extractelement <4 x float> %id, i32 2
+  %res3 = extractelement <4 x float> %id, i32 3
+  %agg1 = insertvalue {float, float, float} undef, float %res1, 0
+  %agg2 = insertvalue {float, float, float} %agg1, float %res2, 1
+  %agg3 = insertvalue {float, float, float} %agg2, float %res3, 2
+  ret {float, float, float} %agg3
+}
+
+define %struct.Gradients @dsquare(<4 x float> %x) {
+entry:
+  %call = tail call %struct.Gradients @__enzyme_fwdvectordiff({float, float, float} (<4 x float>)* @square, <4 x float> %x, %struct.InGradients { float 1.0, float 1.0, float 1.0, float 1.0, float 1.0, float 1.0, float 1.0, float 1.0})
+  ret %struct.Gradients %call
+}
+
+
+; CHECK: define internal [2 x { float, float, float }] @fwdvectordiffesquare(<4 x float> %x, [2 x <4 x float>] %"x'")
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   %sq = fmul <4 x float> %x, %x
+; CHECK-NEXT:   %0 = extractvalue [2 x <4 x float>] %"x'", 0
+; CHECK-NEXT:   %1 = extractelement <4 x float> %0, i64 0
+; CHECK-NEXT:   %2 = insertelement <8 x float> undef, float %1, i64 0
+; CHECK-NEXT:   %3 = extractelement <4 x float> %0, i64 1
+; CHECK-NEXT:   %4 = insertelement <8 x float> %2, float %3, i64 0
+; CHECK-NEXT:   %5 = extractelement <4 x float> %0, i64 2
+; CHECK-NEXT:   %6 = insertelement <8 x float> %4, float %5, i64 0
+; CHECK-NEXT:   %7 = extractelement <4 x float> %0, i64 3
+; CHECK-NEXT:   %8 = insertelement <8 x float> %6, float %7, i64 0
+; CHECK-NEXT:   %9 = extractvalue [2 x <4 x float>] %"x'", 1
+; CHECK-NEXT:   %10 = extractelement <4 x float> %9, i64 0
+; CHECK-NEXT:   %11 = insertelement <8 x float> %8, float %10, i64 0
+; CHECK-NEXT:   %12 = extractelement <4 x float> %9, i64 1
+; CHECK-NEXT:   %13 = insertelement <8 x float> %11, float %12, i64 1
+; CHECK-NEXT:   %14 = extractelement <4 x float> %9, i64 2
+; CHECK-NEXT:   %15 = insertelement <8 x float> %13, float %14, i64 2
+; CHECK-NEXT:   %16 = extractelement <4 x float> %9, i64 3
+; CHECK-NEXT:   %17 = insertelement <8 x float> %15, float %16, i64 3
+; CHECK-NEXT:   %18 = extractvalue [2 x <4 x float>] %"x'", 0
+; CHECK-NEXT:   %19 = extractelement <4 x float> %18, i64 0
+; CHECK-NEXT:   %20 = insertelement <8 x float> undef, float %19, i64 0
+; CHECK-NEXT:   %21 = extractelement <4 x float> %18, i64 1
+; CHECK-NEXT:   %22 = insertelement <8 x float> %20, float %21, i64 0
+; CHECK-NEXT:   %23 = extractelement <4 x float> %18, i64 2
+; CHECK-NEXT:   %24 = insertelement <8 x float> %22, float %23, i64 0
+; CHECK-NEXT:   %25 = extractelement <4 x float> %18, i64 3
+; CHECK-NEXT:   %26 = insertelement <8 x float> %24, float %25, i64 0
+; CHECK-NEXT:   %27 = extractvalue [2 x <4 x float>] %"x'", 1
+; CHECK-NEXT:   %28 = extractelement <4 x float> %27, i64 0
+; CHECK-NEXT:   %29 = insertelement <8 x float> %26, float %28, i64 0
+; CHECK-NEXT:   %30 = extractelement <4 x float> %27, i64 1
+; CHECK-NEXT:   %31 = insertelement <8 x float> %29, float %30, i64 1
+; CHECK-NEXT:   %32 = extractelement <4 x float> %27, i64 2
+; CHECK-NEXT:   %33 = insertelement <8 x float> %31, float %32, i64 2
+; CHECK-NEXT:   %34 = extractelement <4 x float> %27, i64 3
+; CHECK-NEXT:   %35 = insertelement <8 x float> %33, float %34, i64 3
+; CHECK-NEXT:   %36 = shufflevector <4 x float> %x, <4 x float> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3>
+; CHECK-NEXT:   %37 = fmul fast <8 x float> %17, %36
+; CHECK-NEXT:   %38 = shufflevector <4 x float> %x, <4 x float> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3>
+; CHECK-NEXT:   %39 = fmul fast <8 x float> %35, %38
+; CHECK-NEXT:   %40 = fadd fast <8 x float> %37, %39
+; CHECK-NEXT:   %41 = extractelement <8 x float> %40, i64 0
+; CHECK-NEXT:   %42 = insertelement <4 x float> undef, float %41, i64 0
+; CHECK-NEXT:   %43 = extractelement <8 x float> %40, i64 0
+; CHECK-NEXT:   %44 = insertelement <4 x float> %42, float %43, i64 1
+; CHECK-NEXT:   %45 = extractelement <8 x float> %40, i64 0
+; CHECK-NEXT:   %46 = insertelement <4 x float> %44, float %45, i64 2
+; CHECK-NEXT:   %47 = extractelement <8 x float> %40, i64 0
+; CHECK-NEXT:   %48 = insertelement <4 x float> %46, float %47, i64 3
+; CHECK-NEXT:   %49 = insertvalue [2 x <4 x float>] undef, <4 x float> %48, 0
+; CHECK-NEXT:   %50 = extractelement <8 x float> %40, i64 0
+; CHECK-NEXT:   %51 = insertelement <4 x float> undef, float %50, i64 0
+; CHECK-NEXT:   %52 = extractelement <8 x float> %40, i64 1
+; CHECK-NEXT:   %53 = insertelement <4 x float> %51, float %52, i64 1
+; CHECK-NEXT:   %54 = extractelement <8 x float> %40, i64 2
+; CHECK-NEXT:   %55 = insertelement <4 x float> %53, float %54, i64 2
+; CHECK-NEXT:   %56 = extractelement <8 x float> %40, i64 3
+; CHECK-NEXT:   %57 = insertelement <4 x float> %55, float %56, i64 3
+; CHECK-NEXT:   %58 = insertvalue [2 x <4 x float>] %49, <4 x float> %57, 1
+; CHECK-NEXT:   %cb = fmul <4 x float> %sq, %x
+; CHECK-NEXT:   %59 = extractvalue [2 x <4 x float>] %58, 0
+; CHECK-NEXT:   %60 = extractelement <4 x float> %59, i64 0
+; CHECK-NEXT:   %61 = insertelement <8 x float> undef, float %60, i64 0
+; CHECK-NEXT:   %62 = extractelement <4 x float> %59, i64 1
+; CHECK-NEXT:   %63 = insertelement <8 x float> %61, float %62, i64 0
+; CHECK-NEXT:   %64 = extractelement <4 x float> %59, i64 2
+; CHECK-NEXT:   %65 = insertelement <8 x float> %63, float %64, i64 0
+; CHECK-NEXT:   %66 = extractelement <4 x float> %59, i64 3
+; CHECK-NEXT:   %67 = insertelement <8 x float> %65, float %66, i64 0
+; CHECK-NEXT:   %68 = extractvalue [2 x <4 x float>] %58, 1
+; CHECK-NEXT:   %69 = extractelement <4 x float> %68, i64 0
+; CHECK-NEXT:   %70 = insertelement <8 x float> %67, float %69, i64 0
+; CHECK-NEXT:   %71 = extractelement <4 x float> %68, i64 1
+; CHECK-NEXT:   %72 = insertelement <8 x float> %70, float %71, i64 1
+; CHECK-NEXT:   %73 = extractelement <4 x float> %68, i64 2
+; CHECK-NEXT:   %74 = insertelement <8 x float> %72, float %73, i64 2
+; CHECK-NEXT:   %75 = extractelement <4 x float> %68, i64 3
+; CHECK-NEXT:   %76 = insertelement <8 x float> %74, float %75, i64 3
+; CHECK-NEXT:   %77 = extractvalue [2 x <4 x float>] %"x'", 0
+; CHECK-NEXT:   %78 = extractelement <4 x float> %77, i64 0
+; CHECK-NEXT:   %79 = insertelement <8 x float> undef, float %78, i64 0
+; CHECK-NEXT:   %80 = extractelement <4 x float> %77, i64 1
+; CHECK-NEXT:   %81 = insertelement <8 x float> %79, float %80, i64 0
+; CHECK-NEXT:   %82 = extractelement <4 x float> %77, i64 2
+; CHECK-NEXT:   %83 = insertelement <8 x float> %81, float %82, i64 0
+; CHECK-NEXT:   %84 = extractelement <4 x float> %77, i64 3
+; CHECK-NEXT:   %85 = insertelement <8 x float> %83, float %84, i64 0
+; CHECK-NEXT:   %86 = extractvalue [2 x <4 x float>] %"x'", 1
+; CHECK-NEXT:   %87 = extractelement <4 x float> %86, i64 0
+; CHECK-NEXT:   %88 = insertelement <8 x float> %85, float %87, i64 0
+; CHECK-NEXT:   %89 = extractelement <4 x float> %86, i64 1
+; CHECK-NEXT:   %90 = insertelement <8 x float> %88, float %89, i64 1
+; CHECK-NEXT:   %91 = extractelement <4 x float> %86, i64 2
+; CHECK-NEXT:   %92 = insertelement <8 x float> %90, float %91, i64 2
+; CHECK-NEXT:   %93 = extractelement <4 x float> %86, i64 3
+; CHECK-NEXT:   %94 = insertelement <8 x float> %92, float %93, i64 3
+; CHECK-NEXT:   %95 = shufflevector <4 x float> %x, <4 x float> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3>
+; CHECK-NEXT:   %96 = fmul fast <8 x float> %76, %95
+; CHECK-NEXT:   %97 = shufflevector <4 x float> %sq, <4 x float> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3>
+; CHECK-NEXT:   %98 = fmul fast <8 x float> %94, %97
+; CHECK-NEXT:   %99 = fadd fast <8 x float> %96, %98
+; CHECK-NEXT:   %100 = extractelement <8 x float> %99, i64 0
+; CHECK-NEXT:   %101 = insertelement <4 x float> undef, float %100, i64 0
+; CHECK-NEXT:   %102 = extractelement <8 x float> %99, i64 0
+; CHECK-NEXT:   %103 = insertelement <4 x float> %101, float %102, i64 1
+; CHECK-NEXT:   %104 = extractelement <8 x float> %99, i64 0
+; CHECK-NEXT:   %105 = insertelement <4 x float> %103, float %104, i64 2
+; CHECK-NEXT:   %106 = extractelement <8 x float> %99, i64 0
+; CHECK-NEXT:   %107 = insertelement <4 x float> %105, float %106, i64 3
+; CHECK-NEXT:   %108 = insertvalue [2 x <4 x float>] undef, <4 x float> %107, 0
+; CHECK-NEXT:   %109 = extractelement <8 x float> %99, i64 0
+; CHECK-NEXT:   %110 = insertelement <4 x float> undef, float %109, i64 0
+; CHECK-NEXT:   %111 = extractelement <8 x float> %99, i64 1
+; CHECK-NEXT:   %112 = insertelement <4 x float> %110, float %111, i64 1
+; CHECK-NEXT:   %113 = extractelement <8 x float> %99, i64 2
+; CHECK-NEXT:   %114 = insertelement <4 x float> %112, float %113, i64 2
+; CHECK-NEXT:   %115 = extractelement <8 x float> %99, i64 3
+; CHECK-NEXT:   %116 = insertelement <4 x float> %114, float %115, i64 3
+; CHECK-NEXT:   %117 = insertvalue [2 x <4 x float>] %108, <4 x float> %116, 1
+; CHECK-NEXT:   %id = shufflevector <4 x float> %sq, <4 x float> %cb, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+; CHECK-NEXT:   %118 = extractvalue [2 x <4 x float>] %58, 0
+; CHECK-NEXT:   %119 = extractvalue [2 x <4 x float>] %117, 0
+; CHECK-NEXT:   %120 = shufflevector <4 x float> %118, <4 x float> %119, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+; CHECK-NEXT:   %121 = insertvalue [2 x <4 x float>] undef, <4 x float> %120, 0
+; CHECK-NEXT:   %122 = extractvalue [2 x <4 x float>] %58, 1
+; CHECK-NEXT:   %123 = extractvalue [2 x <4 x float>] %117, 1
+; CHECK-NEXT:   %124 = shufflevector <4 x float> %122, <4 x float> %123, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+; CHECK-NEXT:   %125 = insertvalue [2 x <4 x float>] %121, <4 x float> %124, 1
+; CHECK-NEXT:   %res1 = extractelement <4 x float> %id, i32 1
+; CHECK-NEXT:   %126 = extractvalue [2 x <4 x float>] %125, 0
+; CHECK-NEXT:   %127 = extractelement <4 x float> %126, i32 1
+; CHECK-NEXT:   %128 = insertvalue [2 x float] undef, float %127, 0
+; CHECK-NEXT:   %129 = extractvalue [2 x <4 x float>] %125, 1
+; CHECK-NEXT:   %130 = extractelement <4 x float> %129, i32 1
+; CHECK-NEXT:   %131 = insertvalue [2 x float] %128, float %130, 1
+; CHECK-NEXT:   %res2 = extractelement <4 x float> %id, i32 2
+; CHECK-NEXT:   %132 = extractvalue [2 x <4 x float>] %125, 0
+; CHECK-NEXT:   %133 = extractelement <4 x float> %132, i32 2
+; CHECK-NEXT:   %134 = insertvalue [2 x float] undef, float %133, 0
+; CHECK-NEXT:   %135 = extractvalue [2 x <4 x float>] %125, 1
+; CHECK-NEXT:   %136 = extractelement <4 x float> %135, i32 2
+; CHECK-NEXT:   %137 = insertvalue [2 x float] %134, float %136, 1
+; CHECK-NEXT:   %res3 = extractelement <4 x float> %id, i32 3
+; CHECK-NEXT:   %138 = extractvalue [2 x <4 x float>] %125, 0
+; CHECK-NEXT:   %139 = extractelement <4 x float> %138, i32 3
+; CHECK-NEXT:   %140 = insertvalue [2 x float] undef, float %139, 0
+; CHECK-NEXT:   %141 = extractvalue [2 x <4 x float>] %125, 1
+; CHECK-NEXT:   %142 = extractelement <4 x float> %141, i32 3
+; CHECK-NEXT:   %143 = insertvalue [2 x float] %140, float %142, 1
+; CHECK-NEXT:   %agg1 = insertvalue { float, float, float } undef, float %res1, 0
+; CHECK-NEXT:   %144 = extractvalue [2 x float] %131, 0
+; CHECK-NEXT:   %145 = insertvalue { float, float, float } zeroinitializer, float %144, 0
+; CHECK-NEXT:   %146 = insertvalue [2 x { float, float, float }] undef, { float, float, float } %145, 0
+; CHECK-NEXT:   %147 = extractvalue [2 x float] %131, 1
+; CHECK-NEXT:   %148 = insertvalue { float, float, float } zeroinitializer, float %147, 0
+; CHECK-NEXT:   %149 = insertvalue [2 x { float, float, float }] %146, { float, float, float } %148, 1
+; CHECK-NEXT:   %agg2 = insertvalue { float, float, float } %agg1, float %res2, 1
+; CHECK-NEXT:   %150 = extractvalue [2 x { float, float, float }] %149, 0
+; CHECK-NEXT:   %151 = extractvalue [2 x float] %137, 0
+; CHECK-NEXT:   %152 = insertvalue { float, float, float } %150, float %151, 1
+; CHECK-NEXT:   %153 = insertvalue [2 x { float, float, float }] undef, { float, float, float } %152, 0
+; CHECK-NEXT:   %154 = extractvalue [2 x { float, float, float }] %149, 1
+; CHECK-NEXT:   %155 = extractvalue [2 x float] %137, 1
+; CHECK-NEXT:   %156 = insertvalue { float, float, float } %154, float %155, 1
+; CHECK-NEXT:   %157 = insertvalue [2 x { float, float, float }] %153, { float, float, float } %156, 1
+; CHECK-NEXT:   %158 = extractvalue [2 x { float, float, float }] %157, 0
+; CHECK-NEXT:   %159 = extractvalue [2 x float] %143, 0
+; CHECK-NEXT:   %160 = insertvalue { float, float, float } %158, float %159, 2
+; CHECK-NEXT:   %161 = insertvalue [2 x { float, float, float }] undef, { float, float, float } %160, 0
+; CHECK-NEXT:   %162 = extractvalue [2 x { float, float, float }] %157, 1
+; CHECK-NEXT:   %163 = extractvalue [2 x float] %143, 1
+; CHECK-NEXT:   %164 = insertvalue { float, float, float } %162, float %163, 2
+; CHECK-NEXT:   %165 = insertvalue [2 x { float, float, float }] %161, { float, float, float } %164, 1
+; CHECK-NEXT:   ret [2 x { float, float, float }] %165
+; CHECK-NEXT: }
