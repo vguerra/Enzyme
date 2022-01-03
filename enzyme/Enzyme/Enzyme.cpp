@@ -400,7 +400,7 @@ static Value *convertToInternalVectorRepresentation(
       Value *elem = CI->getArgOperand(i + j);
       vec = Builder.CreateInsertValue(vec, elem, {j});
     }
-    i += *width;
+    i += *width - 1;
     return vec;
   }
 }
