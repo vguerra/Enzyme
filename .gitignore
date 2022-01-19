@@ -5,3 +5,4 @@ build
 .vscode
 .cache
 .DS_Store
+.clangd
