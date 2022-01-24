@@ -857,9 +857,7 @@ public:
         IRBuilder<> Builder2(&I);
         getForwardBuilder(Builder2);
 
-        Type *diffeTy = gutils->getWidth() > 1
-                            ? ArrayType::get(valType, gutils->getWidth())
-                            : valType;
+        Type *diffeTy = gutils->getShadowType(valType);
 
         Value *diff = constantval ? Constant::getNullValue(diffeTy)
                                   : diffe(orig_val, Builder2);
@@ -922,9 +920,7 @@ public:
       IRBuilder<> phiBuilder(&phi);
       getForwardBuilder(phiBuilder);
 
-      Type *diffeType = gutils->getWidth() > 1
-                            ? ArrayType::get(phi.getType(), gutils->getWidth())
-                            : phi.getType();
+      Type *diffeType = gutils->getShadowType(phi.getType());
 
       auto newPhi = phiBuilder.CreatePHI(diffeType, 1, phi.getName() + "'");
       for (unsigned int i = 0; i < phi.getNumIncomingValues(); ++i) {
@@ -1015,9 +1011,7 @@ public:
       getForwardBuilder(Builder2);
 
       Value *orig_op0 = I.getOperand(0);
-      Type *diffTy = gutils->getWidth() > 1
-                         ? ArrayType::get(I.getType(), gutils->getWidth())
-                         : I.getType();
+      Type *diffTy = gutils->getShadowType(I.getType());
 
       auto rule = [&](Value *dif) {
         return Builder2.CreateCast(I.getOpcode(), dif, I.getType());
@@ -1176,9 +1170,7 @@ public:
     IRBuilder<> Builder2(&SI);
     getForwardBuilder(Builder2);
 
-    Type *type = gutils->getWidth() > 1
-                     ? ArrayType::get(SI.getType(), gutils->getWidth())
-                     : SI.getType();
+    Type *type = gutils->getShadowType(SI.getType());
 
     Value *dif1;
     Value *dif2;
@@ -1213,9 +1205,7 @@ public:
       bool vectorMode = gutils->getWidth() > 1;
 
       Value *orig_vec = EEI.getVectorOperand();
-      Type *vecTy =
-          vectorMode ? ArrayType::get(orig_vec->getType(), gutils->getWidth())
-                     : orig_vec->getType();
+      Type *vecTy = gutils->getShadowType(orig_vec->getType());
 
       auto vec_diffe = gutils->isConstantValue(orig_vec)
                            ? Constant::getNullValue(vecTy)
@@ -1282,12 +1272,8 @@ public:
       Value *orig_inserted = IEI.getOperand(1);
       Value *orig_index = IEI.getOperand(2);
 
-      Type *insertedTy = vectorMode ? ArrayType::get(orig_inserted->getType(),
-                                                     gutils->getWidth())
-                                    : orig_inserted->getType();
-      Type *vectorTy = vectorMode ? ArrayType::get(orig_vector->getType(),
-                                                   gutils->getWidth())
-                                  : orig_vector->getType();
+      Type *insertedTy = gutils->getShadowType(orig_inserted->getType());
+      Type *vectorTy = gutils->getShadowType(orig_vector->getType());
 
       Value *diff_inserted = gutils->isConstantValue(orig_inserted)
                                  ? Constant::getNullValue(insertedTy)
@@ -1459,10 +1445,7 @@ public:
       getForwardBuilder(Builder2);
 
       Value *orig_aggregate = EVI.getAggregateOperand();
-      Type *agg_type =
-          gutils->getWidth() > 1
-              ? ArrayType::get(orig_aggregate->getType(), gutils->getWidth())
-              : orig_aggregate->getType();
+      Type *agg_type = gutils->getShadowType(orig_aggregate->getType());
 
       Value *diffe_aggregate = gutils->isConstantValue(orig_aggregate)
                                    ? Constant::getNullValue(agg_type)
@@ -1578,15 +1561,8 @@ public:
       Value *orig_val = IVI.getInsertedValueOperand();
       Value *orig_agg = IVI.getAggregateOperand();
 
-      Type *val_type =
-          gutils->getWidth() > 1
-              ? ArrayType::get(orig_val->getType(), gutils->getWidth())
-              : orig_val->getType();
-
-      Type *agg_type =
-          gutils->getWidth() > 1
-              ? ArrayType::get(orig_agg->getType(), gutils->getWidth())
-              : orig_agg->getType();
+      Type *val_type = gutils->getShadowType(orig_val->getType());
+      Type *agg_type = gutils->getShadowType(orig_agg->getType());
 
       Value *diff_val = gutils->isConstantValue(orig_val)
                             ? Constant::getNullValue(val_type)
@@ -2307,9 +2283,7 @@ public:
       // If & against 0b10000000000 and a float the result is 0
       auto &dl = gutils->oldFunc->getParent()->getDataLayout();
       auto size = dl.getTypeSizeInBits(BO.getType()) / 8;
-      Type *diffTy = gutils->getWidth() > 1
-                         ? ArrayType::get(BO.getType(), gutils->getWidth())
-                         : BO.getType();
+      Type *diffTy = gutils->getShadowType(BO.getType());
 
       auto FT = TR.query(&BO).IsAllFloat(size);
       auto eFT = FT;
@@ -3779,10 +3753,7 @@ public:
 
         Value *op0 = gutils->getNewFromOriginal(orig_ops[0]);
         Value *op1 = gutils->getNewFromOriginal(orig_ops[1]);
-        Type *op0Ty =
-            gutils->getWidth() > 1
-                ? ArrayType::get(orig_ops[0]->getType(), gutils->getWidth())
-                : orig_ops[0]->getType();
+        Type *op0Ty = gutils->getShadowType(orig_ops[0]->getType());
 
         Value *res = Constant::getNullValue(op0Ty);
 

@@ -1544,6 +1544,14 @@ public:
     Builder2.setFastMathFlags(getFast());
   }
 
+  Type *getShadowType(Type *ty) {
+    if (width > 1) {
+      return ArrayType::get(ty, width);
+    } else {
+      return ty;
+    }
+  }
+
   /// Unwraps a vector derivative from its internal representation and applies a
   /// function f to each element. Return values of f are collected and wrapped.
   template <typename Func>
